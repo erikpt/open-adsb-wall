@@ -86,7 +86,8 @@ File: `/prefs.json` with `/prefs.bak` on write.
   "sleep_enabled": true,
   "sleep_start": "23:00",
   "sleep_end": "06:30",
-  "timezone": "America/Chicago",
+  "tz_offset_min": -360,
+  "us_dst": true,
   "api": "https://api.example.com",
   "token": ""
 }
@@ -100,7 +101,7 @@ Rules:
 - sleep and night mode are independent: sleep blanks the panel; night only dims
 - booleans from HTML checkboxes: missing key on POST means `false`
 - JSON POSTs are partial merges: omitted keys (including booleans) keep their stored value; JSON booleans are used as-is
-- timezone used for clock display and sleep/fixed windows; sunset uses lat/lon solar math (UTC timestamps)
+- `tz_offset_min` + `us_dst` used for sleep/fixed night windows (lib/tz.py, fixed US DST rule only); sunset uses lat/lon solar math (UTC timestamps)
 
 Apply prefs immediately on save except Wi-Fi credentials (Wi-Fi stays in `settings.toml` for MVP).
 
@@ -125,7 +126,7 @@ Every ~1 s (or on prefs save):
 2. Else if night → `min(brightness_night, brightness_max)`
 3. Else → `min(brightness_day, brightness_max)`
 
-NTP at boot (UTC into RTC). `time.localtime()` for clock windows is acceptable if `tz_offset` is derived from `timezone` for US zones in MVP (`America/Chicago` = UTC−6 / −5). Document DST as a known limitation unless a tz database is added.
+NTP at boot (UTC into RTC). The RTC and `sun.py` stay UTC. `schedule.py` computes local time as UTC + `tz_offset_min` (+60 min under the fixed US DST rule when `us_dst`) via `lib/tz.py`. No tz database: only the fixed US rule is supported.
 
 ## 7. Local web UI
 

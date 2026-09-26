@@ -56,14 +56,29 @@ h1{font-size:1.2rem}
   <div><label>Sleep end</label><input name="sleep_end" id="sleep_end"/></div>
 </div>
 
-<label>Timezone</label><input name="timezone" id="timezone"/>
+<h2>Local time</h2>
+<label>UTC offset (standard time)</label>
+<select name="tz_offset_min" id="tz_offset_min">
+  <option value="-300">Eastern (UTC−5)</option>
+  <option value="-360">Central (UTC−6)</option>
+  <option value="-420">Mountain (UTC−7)</option>
+  <option value="-480">Pacific (UTC−8)</option>
+  <option value="-540">Alaska (UTC−9)</option>
+  <option value="-600">Hawaii (UTC−10)</option>
+  <option value="0">UTC</option>
+</select>
+<div class="check"><input type="checkbox" name="us_dst" id="us_dst" value="1"/><span>Apply US daylight saving (2nd Sun Mar – 1st Sun Nov)</span></div>
+<p class="muted">Fixed US DST rule only. Uncheck for Arizona/Hawaii or outside the US.</p>
 <label>API URL</label><input name="api" id="api"/>
 <label>Device token</label><input name="token" id="token" autocomplete="off"/>
 <button type="submit">Save</button>
 </form>
 <script>
 function set(id,v){const el=document.getElementById(id);if(!el)return;
-  if(el.type==="checkbox")el.checked=!!v;else el.value=v??"";}
+  if(el.type==="checkbox")el.checked=!!v;
+  else{if(el.tagName==="SELECT"&&v!=null&&![...el.options].some(o=>o.value===String(v))){
+      const o=document.createElement("option");o.value=o.textContent=String(v);el.appendChild(o);}
+    el.value=v??"";}}
 function sync(){
   bdv.textContent=(+brightness_day.value).toFixed(2);
   bnv.textContent=(+brightness_night.value).toFixed(2);
