@@ -159,6 +159,14 @@
           </div>
         </article>
 
+        <article class="part">
+          <h3>Board power cable (optional, run off one PSU)</h3>
+          <p class="part-spec">Bare-wire-to-USB-C pigtail, 5V &mdash; splice onto the same power brick as the panel to power the MatrixPortal S3 too, instead of a second USB-C charger. See the wiring gotcha below first.</p>
+          <div class="part-links">
+            <a href="https://www.amazon.com/Pigtail-Connectors-Arduino-Electronics-Projects/dp/B0GBGLNR52">Amazon</a>
+          </div>
+        </article>
+
       </div>
       <div class="warning-box">
         <strong>Wiring gotcha (confirmed on hardware):</strong> the MatrixPortal S3 has its own 5V/GND
@@ -169,6 +177,12 @@
         ends up entirely dependent on USB, and goes dark the moment you unplug USB-C even though a
         beefy external supply is nominally connected. Always wire the external supply straight to the
         panel's own power pads, never the MatrixPortal's screw lugs.
+        <p style="margin-top: 0.75em; margin-bottom: 0;"><strong>Powering both from one supply, the right way:</strong>
+        the board still has to be fed through its USB-C port &mdash; that part doesn't change &mdash; it just
+        doesn't need its own wall charger. Splice the power brick's leads onto a small junction, run one branch
+        straight to the panel's power input as above, and run the other through a bare-wire-to-USB-C pigtail
+        cable (see Hardware above) into the MatrixPortal's USB-C port. One brick, two independent power inputs,
+        no back-feeding.</p>
       </div>
       <p class="part-disclaimer">Links are for reference, not endorsements or affiliate links (we don't have any) &mdash; verify specs before buying, prices and listings change.</p>
     </div>
