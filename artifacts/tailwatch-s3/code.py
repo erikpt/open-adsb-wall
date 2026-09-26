@@ -13,13 +13,14 @@ import rtc
 import adafruit_ntp
 from adafruit_httpserver import Server, Request, Response, Status, GET, POST
 
-from prefs import load, apply_form
+from prefs import load, apply_form, public
 from urldecode import unquote_plus
 from schedule import sleeping, brightness, set_clock_synced, clock_synced, clock_trusted
 from bbox import box
 from dim import Dimmer, min_visible
 import wifisettings
 import httpclient
+import reqguard
 from linkwatch import LinkWatch, UP as LINK_UP
 
 displayio.release_displays()
@@ -238,6 +239,17 @@ def _json(request, obj, code=200, reason="OK"):
                     status=Status(code, reason))
 
 
+def _guard(request, write):
+    """403 Response if the request isn't same-origin for this device, else None.
+    Reads the global `host`, so it follows LinkWatch IP changes and AP mode."""
+    h = request.headers  # adafruit_httpserver Headers: case-insensitive .get
+    why = reqguard.check(h.get("Host"), h.get("Origin"), h.get("Referer"), host, write)
+    if why is None:
+        return None
+    print("api 403:", why)
+    return _json(request, {"error": "forbidden: " + why}, 403, "Forbidden")
+
+
 def _read_form(request, include_query=True):
     """(form dict, is_json); form is None for an unparseable JSON body."""
     form = {}
@@ -273,12 +285,18 @@ def _read_form(request, include_query=True):
 
 
 def get_prefs(request: Request):
+    bad = _guard(request, False)
+    if bad:
+        return bad
     _touch()
-    return Response(request, json.dumps(load()), content_type="application/json")
+    return _json(request, public(load()))
 
 
 def post_prefs(request: Request):
     global prefs
+    bad = _guard(request, True)
+    if bad:
+        return bad
     _touch()
     form, is_json = _read_form(request)
     if form is None:
@@ -295,10 +313,13 @@ def post_prefs(request: Request):
         )
     if not ap_mode and dimmer.apply(brightness(prefs)):
         print("brightness", dimmer.level)
-    return Response(request, json.dumps(prefs), content_type="application/json")
+    return _json(request, public(prefs))
 
 
 def get_status(request: Request):
+    bad = _guard(request, False)
+    if bad:
+        return bad
     _touch()
     return _json(request, {
         "mode": "ap" if ap_mode else "sta",
@@ -316,6 +337,9 @@ def get_status(request: Request):
 def post_wifi(request: Request):
     """Allow-listed {ssid, password, open} -> /settings.toml, then hard reset."""
     global reset_at
+    bad = _guard(request, True)
+    if bad:
+        return bad
     _touch()
     form, _ = _read_form(request, include_query=False)  # keep passwords out of URLs/logs
     if form is None:

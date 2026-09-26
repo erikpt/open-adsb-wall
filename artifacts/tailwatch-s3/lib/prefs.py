@@ -45,6 +45,17 @@ _FLOATS = {
 
 _TIMES = ("night_start", "night_end", "sleep_start", "sleep_end")
 
+SECRET_KEYS = ("token",)  # write-only: POST may set, GET/POST responses never echo (issue #14)
+
+
+def public(p):
+    """Copy of prefs safe to send to a browser: secrets dropped, token_set added."""
+    out = dict(p)
+    for k in SECRET_KEYS:
+        out.pop(k, None)
+    out["token_set"] = bool(str(p.get("token", "") or "").strip())
+    return out
+
 
 def _bad(k, v):
     # Serial diagnostic: a rejected value is replaced by its default and the
@@ -178,7 +189,7 @@ def apply_form(current, form, partial=False):
         elif not partial:
             out[k] = False
     for k, v in form.items():
-        if k in _BOOLS:
+        if k in _BOOLS or k in SECRET_KEYS:
             continue
         if k in _FLOATS:
             try:
@@ -187,4 +198,13 @@ def apply_form(current, form, partial=False):
                 pass
         elif k in current and isinstance(v, str):
             out[k] = v
+    # Write-only token: GET never returns it, so the form box is blank unless the
+    # user typed a new one. Blank/absent keeps the stored token; token_clear
+    # (checkbox or JSON true) erases it. Same rule for form and JSON posts.
+    if _to_bool(form.get("token_clear", False)):
+        out["token"] = ""
+    else:
+        t = form.get("token")
+        if isinstance(t, str) and t.strip():
+            out["token"] = t.strip()
     return save(out)

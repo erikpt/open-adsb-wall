@@ -149,10 +149,16 @@ exposes the filesystem.
 | Route | Method | Purpose |
 |---|---|---|
 | `/` | GET | `www/index.html` |
-| `/api/prefs` | GET | current JSON |
+| `/api/prefs` | GET | current JSON minus `token`, plus `token_set` (`lib/prefs.py:public()`) |
 | `/api/prefs` | POST | form or JSON merge → save → apply brightness (station mode only) |
 | `/api/status` | GET | `{mode, ip, ssid, ap_ssid, networks, clock_synced, clock_trusted, rebooting, wifi_drops}` -- never a password |
 | `/api/wifi` | POST | JSON or form `{ssid, password, open}` → `lib/wifisettings.py` → `/settings.toml` → hard reset (§ AP mode below) |
+
+All `/api/*` routes require `Host` to be the device's own current address;
+POSTs also require a same-origin `Origin`/`Referer`, else `403` (`lib/reqguard.py`,
+issue #14). Reaching the UI by a DNS name instead of its IP therefore returns
+403 on every `/api/*` call -- the UI is documented as `http://<ip>/`, not a
+hostname.
 
 UI fields must match the schema in §6 (already drafted in `www/index.html`).
 
@@ -172,9 +178,9 @@ If `CIRCUITPY_WIFI_SSID` is empty, or joining it fails (two 10 s
   max_connections=2)`. The password is 8 random characters from a 32-symbol
   alphabet (no `l`/`o`/`0`/`1`), generated fresh every boot with
   `os.urandom`, never persisted, and only shown on the panel (and serial) --
-  not open, because on the AP `GET /api/prefs` returns the device token and
-  `POST /api/wifi` can repoint the device at another network, so being able
-  to read the password proves you're standing at the device.
+  not open, because `POST /api/wifi` can repoint the device at another
+  network, so being able to read the password proves you're standing at
+  the device.
 - Serve the same UI at `wifi.radio.ipv4_address_ap` (normally
   `192.168.4.1`); the Wi-Fi form is shown above the regular prefs form.
 - Prefs save still writes `/prefs.json`, but the dimmer/brightness path is
@@ -453,7 +459,8 @@ Magnolia box, the board may be empty often (Hooks GA). Default `hide_ga: false`.
 
 - No cloud tier, so no device/cloud token to manage (issue #2)
 - Local UI has no auth in MVP (LAN trust). Do not expose the S3 port to WAN
-- OpenSky token (optional, only to raise the anonymous rate limit) lives in `/prefs.json` on-device; `GET /api/prefs` must not echo it back (issue #14, open)
+- OpenSky token (optional, only to raise the anonymous rate limit) lives in `/prefs.json` on-device. It is write-only: `token` is never present in a `GET`/`POST` `/api/prefs` response, only a `token_set` boolean (`lib/prefs.py:public()`, `lib/reqguard.py`, issue #14)
+- All `/api/*` routes require `Host` to match the device's own current address (blocks DNS rebinding); POSTs also require a same-origin `Origin` (or `Referer` if no `Origin`), or a `403` (blocks CSRF from another site the LAN browser has open) -- `lib/reqguard.py`, checked by `code.py:_guard()`
 - CIRCUITPY is writable; do not put secrets in git
 
 ## 12. Implementation order (coding agent)

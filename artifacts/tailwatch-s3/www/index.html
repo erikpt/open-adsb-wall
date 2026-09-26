@@ -73,7 +73,10 @@ h1{font-size:1.2rem}
 <div class="check"><input type="checkbox" name="us_dst" id="us_dst" value="1"/><span>Apply US daylight saving (2nd Sun Mar – 1st Sun Nov)</span></div>
 <p class="muted">Fixed US DST rule only. Uncheck for Arizona/Hawaii or outside the US.</p>
 <label>API URL</label><input name="api" id="api"/>
-<label>Device token</label><input name="token" id="token" autocomplete="off"/>
+<label>OpenSky token (optional)</label>
+<input name="token" id="token" type="password" autocomplete="new-password" spellcheck="false"/>
+<p class="muted" id="tokenstate"></p>
+<div class="check"><input type="checkbox" name="token_clear" id="token_clear" value="1"/><span>Remove saved token</span></div>
 <button type="submit">Save</button>
 </form>
 
@@ -107,6 +110,9 @@ function sync(){
 });
 fetch("/api/prefs").then(r=>r.json()).then(p=>{
   Object.keys(p).forEach(k=>set(k,p[k]));
+  $("token").value="";
+  $("token").placeholder=p.token_set?"saved (hidden) - leave blank to keep":"not set";
+  $("tokenstate").textContent=p.token_set?"A token is saved. It is never shown; type a new one to replace it.":"No token saved (anonymous OpenSky limits).";
   sync();
   $("status").textContent="prefs loaded";
 }).catch(()=>{$("status").textContent="could not load prefs";});
