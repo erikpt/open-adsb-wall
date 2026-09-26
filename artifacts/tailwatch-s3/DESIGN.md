@@ -99,6 +99,7 @@ Rules:
 - `night_mode`: `off` | `fixed` | `sunset`
 - sleep and night mode are independent: sleep blanks the panel; night only dims
 - booleans from HTML checkboxes: missing key on POST means `false`
+- JSON POSTs are partial merges: omitted keys (including booleans) keep their stored value; JSON booleans are used as-is
 - timezone used for clock display and sleep/fixed windows; sunset uses lat/lon solar math (UTC timestamps)
 
 Apply prefs immediately on save except Wi-Fi credentials (Wi-Fi stays in `settings.toml` for MVP).
@@ -128,7 +129,9 @@ NTP at boot (UTC into RTC). `time.localtime()` for clock windows is acceptable i
 
 ## 7. Local web UI
 
-Static files in `/www`. Server: `adafruit_httpserver` on port 80.
+Static files in `/www`. Server: `adafruit_httpserver` on port 80. Web Workflow
+(CIRCUITPY_WEB_API_PASSWORD) must stay disabled -- it also binds port 80 and
+exposes the filesystem.
 
 | Route | Method | Purpose |
 |---|---|---|

@@ -1,3 +1,7 @@
 CIRCUITPY_WIFI_SSID = "your-ssid"
 CIRCUITPY_WIFI_PASSWORD = "your-password"
-CIRCUITPY_WEB_API_PASSWORD = "fw"
+
+# Do NOT set CIRCUITPY_WEB_API_PASSWORD. It turns on CircuitPython's built-in
+# Web Workflow, which binds port 80 (TailWatch's web UI needs that port) and
+# exposes the whole CIRCUITPY filesystem -- including the API token stored in
+# /prefs.json -- to anyone on the LAN who knows the password.

@@ -79,16 +79,47 @@ def save(data):
     return data
 
 
-def apply_form(current, form):
+_TRUTHY = ("1", "true", "on", "yes")
+
+
+def _to_bool(v):
+    """Coerce a submitted value to bool, or None if unrecognised.
+
+    bool is checked first: isinstance(True, int) is True.
+    """
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        return v.strip().lower() in _TRUTHY
+    return None
+
+
+def apply_form(current, form, partial=False):
+    """Merge a POSTed dict into current prefs and save.
+
+    partial=False (HTML form: urlencoded/multipart/query, all-string values):
+        every boolean is rewritten; a missing key means False, because an
+        unchecked checkbox is simply absent (DESIGN.md section 6).
+    partial=True (JSON body, native types): only keys present in `form`
+        change; omitted or unrecognised values keep their stored value.
+    """
     out = dict(current)
     for k in _BOOLS:
-        out[k] = form.get(k) in ("1", "true", "on", "yes")
+        b = _to_bool(form[k]) if k in form else None
+        if b is not None:
+            out[k] = b
+        elif not partial:
+            out[k] = False
     for k, v in form.items():
+        if k in _BOOLS:
+            continue
         if k in _FLOATS:
             try:
                 out[k] = float(v)
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
-        elif k in current and k not in _BOOLS:
+        elif k in current and isinstance(v, str):
             out[k] = v
     return save(out)
