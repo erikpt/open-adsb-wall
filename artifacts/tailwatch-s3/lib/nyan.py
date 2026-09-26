@@ -92,13 +92,16 @@ for _fr in CAT:
     _SPR.append(_pts)
 
 
-def play(display, duration_s=8.0, brightness=0.25, frame_dt=0.07):
+def play(display, duration_s=90.0, brightness=0.25, frame_dt=0.07, should_stop=None):
     """Play the Nyan Cat animation on an already-initialized display.
 
-    Swaps in its own bitmap/root_group, runs for duration_s seconds, then
-    restores whatever root_group/brightness the caller had before this ran.
-    Blocks the caller for the full duration_s (same single-loop model as
-    the rest of this CircuitPython firmware -- there is no threading).
+    Swaps in its own bitmap/root_group, runs for up to duration_s seconds
+    (default 90s), then restores whatever root_group/brightness the caller
+    had before this ran. Pass should_stop as a zero-arg callable (e.g.
+    lambda: up_button.pressed() or down_button.pressed()) to return early --
+    checked once per frame, not polled faster than that. Blocks the caller
+    the whole time it runs (same single-loop model as the rest of this
+    CircuitPython firmware -- there is no threading).
     """
     palette = displayio.Palette(16)
     for i, c in enumerate(_PALETTE_COLORS):
@@ -123,6 +126,8 @@ def play(display, duration_s=8.0, brightness=0.25, frame_dt=0.07):
     last = start
     try:
         while time.monotonic() - start < duration_s:
+            if should_stop is not None and should_stop():
+                break
             now = time.monotonic()
             if now - last < frame_dt:
                 continue

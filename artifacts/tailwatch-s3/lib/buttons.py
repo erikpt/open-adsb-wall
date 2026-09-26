@@ -22,11 +22,11 @@ class HoldButton:
         self._press_start = None
         self._fired = False
 
-    def _pressed(self):
+    def pressed(self):
         return not self._io.value  # active-low
 
     def poll(self):
-        if self._pressed():
+        if self.pressed():
             if self._press_start is None:
                 self._press_start = time.monotonic()
                 self._fired = False
