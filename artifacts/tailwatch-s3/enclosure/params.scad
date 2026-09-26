@@ -47,7 +47,9 @@ portal_rot = 0;                   // [MEASURE] match your board once plugged in
 
 // LED face -> UNDERSIDE of the MatrixPortal PCB once it is fully seated on
 // the panel's header.  Depends on the panel's box-header height and shell.
-portal_pcb_z = 14.0;              // [MEASURE] most important depth number
+portal_pcb_z = 15.5;              // [MEASURE] most important depth number. The default
+                                  //   leaves 2.5 mm between the PCB underside and a 13 mm
+                                  //   shell -- room for the M2.5 screw heads (see pod_fix).
 
 /* ---------- Adafruit MatrixPortal S3 (PID 5778) ----------
    All [VERIFIED] values come from Adafruit's own Eagle board file
@@ -106,7 +108,6 @@ kh_head_d  = 9.0;                 // entry hole (fits a ~8 mm pan/round screw he
 kh_shank_d = 4.5;                 // slot width (#6-#8 / 3.5-4 mm wood screw shank)
 kh_slot    = 8.0;                 // slot length (entry-hole centre -> hang position)
 kh_boss_w  = 20;                  // flange widened to this around each keyhole
-kh_boss_d  = 18;
 
 /* ---------- Ventilation (diamond holes in top and bottom walls) ---------- */
 vent_d     = 6.0;                 // diamond diagonal (no bridging needed)
@@ -125,7 +126,7 @@ usb_notch_dz = 3.5;               // notch floor sits this far below the USB-C c
 strap_xs      = [48, 208];        // [PLACEHOLDER] X of each strap = X of a column of
                                   //   panel M3 posts. One strap per frame half minimum.
 strap_w       = 16;
-strap_t       = 4.0;
+strap_t       = 5.0;
 strap_slot_w  = 3.4;              // M3 clearance
 strap_overlap = 3.0;              // strap end reaches this far over the ledge wedge
 strap_clr     = 0.2;              // [TUNE] strap end <-> ledge wedge clearance
@@ -137,9 +138,14 @@ pod_roof_t  = 2.4;
 pod_margin  = 1.5;                // roof overhang past the PCB outline
 pod_skirt_t = 2.0;
 pod_skirt_gap = 5.0;              // open gap between PCB top and skirt bottom (air + cables)
-pod_post_d  = 5.5;
+pod_post_d  = 4.6;                // <= 5.2: nearest part (100uF cap) is 2.65 mm from hole 1
+pod_fix     = "screws";           // "screws": 4x M2.5x6 pan head from UNDER the PCB into the
+                                  //   posts (needs >= 2.2 mm under the PCB, i.e.
+                                  //   portal_pcb_z >= panel_thk + 2.2).
+                                  // "pins": printed press-fit pins into the 4 holes (no gap needed)
 pod_pilot_d = 2.2;                // [TUNE] M2.5 self-tapping pilot (2.5 = clearance)
 pod_pilot_depth = 8.0;
+pod_pin_d   = 2.3;                // [TUNE] press-fit pin into the 2.5 mm plated hole
 
 /* ---------- Button push-rods ---------- */
 rod_w     = 4.0;                  // rod width (along the board edge)
@@ -157,6 +163,7 @@ pad_drop  = 3.0;                  // pad extends this far below the rod (catches
 /* ---------- Engraved labels ---------- */
 label_size  = 3.5;
 label_depth = 0.6;
+label_font  = "Liberation Sans:style=Bold";   // bundled with official OpenSCAD builds
 
 /* ---------- Render quality ---------- */
 $fn = 40;
@@ -180,14 +187,19 @@ flange_front_z = frame_back_z - flange_t;
 
 strap_front_z = zf + ledge_tip + strap_clr;
 strap_rear_z  = strap_front_z + strap_t;
-rib_h         = strap_front_z - panel_thk - strap_preload;
+rib_h         = strap_front_z - zf - strap_preload;   // rib stops just short of the panel
+
+// keyhole geometry: hang position keeps the screw head clear of the top wall
+kh_top_y  = panel_h + C - kh_head_d/2 - 1;          // screw centre when hanging
+kh_entry_y = kh_top_y - kh_slot;                     // entry-hole centre
+kh_boss_d = panel_h + C - kh_entry_y + kh_head_d/2 + 2.5;
 
 mp_buttons = include_reset_pusher ? mp_buttons_all
                                   : [for (b = mp_buttons_all) if (b[0] != "RST") b];
 tip_min  = min([for (b = mp_buttons) b[2]]);
 x_block_in = tip_min - btn_gap - leg_t;              // guide block inner face (board x)
 x_block_out = x_block_in - block_len;
-rod_top_bz = roof_under_bz - rod_clr;
+rod_top_bz = roof_under_bz - rod_clr - 0.4;          // 0.4 mm of block left under the roof
 rod_bz0    = rod_top_bz - rod_h;                     // rod underside (board frame)
 btn_y_min  = min([for (b = mp_buttons) b[1]]);
 btn_y_max  = max([for (b = mp_buttons) b[1]]);
@@ -209,7 +221,7 @@ wall_out_bx = mp_socket_c[0] - edge_dist;            // board-frame x of that wa
 x_pad_in    = wall_out_bx - pad_gap;
 
 // Pod footprint (board frame) and its panel-frame bounding box
-pod_x0 = x_block_out;
+pod_x0 = x_block_out - 0.5;                          // roof overhangs the guide block slightly
 pod_x1 = mp_pcb[0] + pod_margin + pod_skirt_t;
 pod_y0 = -pod_margin - pod_skirt_t;
 pod_y1 = mp_pcb[1] + pod_margin + pod_skirt_t;
@@ -228,7 +240,9 @@ module _warn(cond, msg) { if (cond) echo(str("<b>WARNING:</b> ", msg)); }
 module run_checks() {
     _warn(portal_pcb_z + rod_bz0 < strap_rear_z + 1,
           "push-rods would hit the rear straps; increase pod_clear");
-    _warn(pod_top_z > flange_front_z - 1, "pod roof reaches the wall flange");
+    _warn(pod_top_z > frame_back_z - 1, "pod roof would touch the wall");
+    _warn(pod_fix == "screws" && portal_pcb_z - panel_thk < 2.2,
+          "less than 2.2 mm under the MatrixPortal PCB for M2.5 screw heads: use pod_fix = \"pins\"");
     _warn(pod_bb_lo[0] < C + flange_w || pod_bb_hi[0] > panel_w - C - flange_w
           || pod_bb_lo[1] < C + flange_w || pod_bb_hi[1] > panel_h - C - flange_w,
           "pod is inside the rear-flange band; check for collisions in assembly.scad");

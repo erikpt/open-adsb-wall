@@ -78,8 +78,7 @@ function keyhole_xs() = [seam_x - keyhole_spacing/2, seam_x + keyhole_spacing/2]
 // Keyhole: big entry hole low, slot running UP from it (the frame drops onto the screws).
 module keyholes() {
     for (kx = keyhole_xs()) {
-        yb = panel_h + C - kh_boss_d + kh_head_d/2 + 2;           // entry-hole centre
-        translate([kx, yb, flange_front_z - 1]) {
+        translate([kx, kh_entry_y, flange_front_z - 1]) {
             cylinder(d = kh_head_d, h = flange_t + 2);
             translate([-kh_shank_d/2, 0, 0]) cube([kh_shank_d, kh_slot, flange_t + 2]);
             translate([0, kh_slot, 0]) cylinder(d = kh_shank_d, h = flange_t + 2);
@@ -146,7 +145,7 @@ module portal_notches() {
 // Engraved labels on the outside of the frame.
 module _eng_text(t) {
     linear_extrude(label_depth + 1)
-        text(t, size = label_size, font = "Liberation Sans:style=Bold", halign = "center", valign = "center");
+        text(t, size = label_size, font = label_font, halign = "center", valign = "center");
 }
 module labels() {
     // next to the USB / button notches: baseline along the depth axis
@@ -200,12 +199,9 @@ rib_y0 = -C + ledge_w + 1;
 // Envelope of the ledge wedges (plus clearance) -- subtracted from the strap
 // ends so they sit on the 45-degree slope.
 module wedge_envelope() {
-    for (s = [0, 1]) {
-        yw = s == 0 ? -C : panel_h + C;
-        translate([0, yw, 0]) mirror([0, s, 0])
-            translate([-50, 0, 0]) along_side(panel_w + 100)
-                offset(delta = strap_clr) ledge_profile();
-    }
+    module one() translate([-50, 0, 0]) along_side(panel_w + 100) offset(delta = strap_clr) ledge_profile();
+    translate([0, -C, 0]) one();
+    translate([0, panel_h + C, 0]) mirror([0, 1, 0]) one();
 }
 
 // strap in assembled position, centred on x = 0
@@ -220,7 +216,6 @@ module strap_raw() {
         // long slot for the M3 screws into the panel posts
         hull() for (y = [rib_y0 + 5, panel_h - rib_y0 - 5])
             translate([0, y, 0]) cylinder(d = strap_slot_w, h = 100);
-        // "TOP" arrow is not needed: the strap is symmetric.
     }
 }
 
@@ -232,24 +227,31 @@ module pod_raw() {
     by1 = btn_y_max + rod_w/2 + 2.5;
     difference() {
         union() {
-            // roof
-            translate([pod_x0, pod_y0, roof_under_bz])
-                linear_extrude(pod_roof_t) rrect([pod_x1 - pod_x0, pod_y1 - pod_y0], 2);
-            // skirts on the two long sides and the IDC end (USB/button side left open)
+            // roof + skirts on the two long sides and the IDC end (USB/button side open)
             skz = mp_pcb_t + pod_skirt_gap;
-            for (y = [pod_y0, pod_y1 - pod_skirt_t])
-                translate([pod_x0, y, skz]) cube([pod_x1 - pod_x0, pod_skirt_t, roof_under_bz - skz + eps]);
-            translate([pod_x1 - pod_skirt_t, pod_y0, skz]) cube([pod_skirt_t, pod_y1 - pod_y0, roof_under_bz - skz + eps]);
+            difference() {
+                translate([pod_x0, pod_y0, skz])
+                    linear_extrude(roof_top_bz - skz) rrect([pod_x1 - pod_x0, pod_y1 - pod_y0], 0.6 * pod_skirt_t);
+                translate([pod_x0 - 1, pod_y0 + pod_skirt_t, skz - 1])
+                    cube([pod_x1 - pod_skirt_t - pod_x0 + 1, pod_y1 - pod_y0 - 2*pod_skirt_t, roof_under_bz - skz + 1]);
+            }
             // posts onto the 4 mounting holes
-            for (h = mp_holes)
-                translate([h[0], h[1], mp_pcb_t]) cylinder(d = pod_post_d, h = roof_under_bz - mp_pcb_t + eps);
+            for (h = mp_holes) {
+                translate([h[0], h[1], mp_pcb_t]) cylinder(d = pod_post_d, h = roof_under_bz - mp_pcb_t + 0.5);
+                if (pod_fix == "pins")      // press-fit pin through the PCB, chamfered tip
+                    translate([h[0], h[1], 0.3]) {
+                        cylinder(d = pod_pin_d, h = mp_pcb_t);
+                        translate([0, 0, -0.3]) cylinder(d1 = pod_pin_d - 0.6, d2 = pod_pin_d, h = 0.3 + eps);
+                    }
+            }
             // push-rod guide block
             translate([x_block_out, by0, rod_bz0 - rod_clr - block_floor])
-                cube([block_len, by1 - by0, roof_under_bz - (rod_bz0 - rod_clr - block_floor) + eps]);
+                cube([block_len, by1 - by0, roof_under_bz - (rod_bz0 - rod_clr - block_floor) + 0.5]);
         }
         // screw pilots
-        for (h = mp_holes)
-            translate([h[0], h[1], mp_pcb_t - 1]) cylinder(d = pod_pilot_d, h = pod_pilot_depth + 1);
+        if (pod_fix == "screws")
+            for (h = mp_holes)
+                translate([h[0], h[1], mp_pcb_t - 1]) cylinder(d = pod_pilot_d, h = pod_pilot_depth + 1);
         // rod tunnels
         for (b = mp_buttons)
             translate([x_block_out - 1, b[1] - rod_w/2 - rod_clr, rod_bz0 - rod_clr])
@@ -259,14 +261,8 @@ module pod_raw() {
             hull() for (y = [19.5, 32]) translate([x, y, roof_under_bz - 1]) cylinder(d = 2.6, h = pod_roof_t + 2, $fn = 16);
         // name on the roof
         translate([(pod_x0 + pod_x1)/2 - 4, 8, roof_top_bz - 0.6])
-            linear_extrude(1) text("TailWatch", size = 5, font = "Liberation Sans:style=Bold",
+            linear_extrude(1) text("TailWatch", size = 5, font = label_font,
                                    halign = "center", valign = "center");
-        // button labels on the guide block's outer face
-        for (b = mp_buttons)
-            translate([x_block_out + 0.6, b[1], rod_bz0 - rod_clr - block_floor + 0.1])
-                rotate([0, -90, 0]) rotate(90) linear_extrude(1)
-                    text(b[0] == "RST" ? "R" : b[0] == "UP" ? "U" : "D", size = 1.2,
-                         halign = "center", valign = "bottom");
     }
 }
 
@@ -320,4 +316,60 @@ module portal_dummy() {
         color("gray") translate([mp_socket_c[0] - mp_socket[0]/2, mp_socket_c[1] - mp_socket[1]/2, -mp_socket[2]])
             cube([mp_socket[0], mp_socket[1], mp_socket[2]]);
     }
+}
+
+// =====================================================================
+// PRINT ORIENTATIONS (used by the per-part files)
+// =====================================================================
+// Frame half, rear (wall) face down.  Rotation, not mirror.
+module frame_print(side) {
+    translate([side == 0 ? C + W : -seam_x, panel_h + C + W, 0])
+        rotate([180, 0, 0]) translate([0, 0, -frame_back_z]) frame_half(side);
+}
+
+// Strap, flat rear face down.
+module strap_print() {
+    translate([strap_w/2, panel_h - strap_y0, 0])
+        rotate([180, 0, 0]) translate([0, 0, -strap_rear_z]) strap_raw();
+}
+
+// Pod, roof down.
+module pod_print() {
+    translate([-pod_x0, pod_y1, 0])
+        rotate([180, 0, 0]) translate([0, 0, -roof_top_bz]) pod_raw();
+}
+
+// All push-rods, lying flat, with an engraved D / U / R next to the pad.
+rod_prof_lo = min(leg_bot_bz, rod_bz0 - pad_drop);
+rod_prof_h  = rod_top_bz - rod_prof_lo;
+module rods_print() {
+    for (i = [0 : len(mp_buttons) - 1]) {
+        b = mp_buttons[i];
+        translate([-(x_pad_in - pad_t), i * (rod_prof_h + 4) - rod_prof_lo, 0])
+        difference() {
+            linear_extrude(rod_w) rod_profile(b[2]);
+            translate([x_pad_in + 3, rod_bz0 + rod_h/2, rod_w - 0.5])
+                linear_extrude(1) rotate(-90)
+                    text(b[0] == "RST" ? "R" : b[0] == "UP" ? "U" : "D", size = 3,
+                         font = label_font, halign = "center", valign = "center");
+        }
+    }
+}
+
+module keys_print() {
+    for (i = [0, 1]) translate([bt_len/2 + 1 + i * (bt_len + 4), bt_end/2 + 1, 0]) bowtie_key();
+}
+
+// Everything in place (for the preview). explode > 0 pulls parts apart.
+module assembly(explode = 0) {
+    panel_dummy();
+    portal_dummy();
+    color([0.55, 0.75, 0.95]) translate([0, 0, 0.6 * explode]) on_board() pod_raw();
+    color([0.95, 0.75, 0.2]) translate([0, 0, 0.6 * explode]) on_board() for (b = mp_buttons) rod_raw(b);
+    for (sx = strap_xs) color([0.4, 0.8, 0.45]) translate([sx, 0, 0.3 * explode]) strap_raw();
+    color([0.85, 0.85, 0.88]) translate([-explode, 0, explode]) frame_half(0);
+    color([0.7, 0.7, 0.75])  translate([ explode, 0, explode]) frame_half(1);
+    color("tomato") for (s = [0, 1])
+        translate([seam_x, s == 0 ? -C + boss_d/2 - 0.5 : panel_h + C - boss_d/2 + 0.5, zf + 0.25 + 1.6 * explode])
+            bowtie_key();
 }
