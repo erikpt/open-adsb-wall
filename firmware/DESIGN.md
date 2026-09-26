@@ -399,15 +399,63 @@ each way.
 
 ### Badges (was `GET /v1/logo/{id}`)
 
-Superseded (issue #2): airline badges are no longer fetched from the cloud.
-`tools/gen_badges.py` (host-only, stdlib-only, Pillow-free generator) bakes 50
-24×24, 4-bit indexed BMP tiles into `lib/logos/<key>.bmp` at build time, one per
-`lib/enrich.py:AIRLINES` entry plus a generic fallback (`_unk.bmp`). All 50
-badges together are 17,700 bytes (354 bytes each); on the board's 512-byte
-FAT clusters that's ~25 KB, comfortably inside the 8 MB flash. Only one badge
-is loaded into RAM at a time (~288 bytes). `lib/enrich.py:badge_path()` maps a
-lookup to its file path; `lib/card.py` loads it with `adafruit_imageload.load()`
-or `displayio.OnDiskBitmap()`. No PNG, no network round-trip, no server.
+Superseded (issue #2): airline badges are no longer fetched from the cloud;
+everything below is baked into `lib/logos/<key>.bmp` at build time, one file
+per `lib/enrich.py:AIRLINES` entry plus a generic fallback (`_unk.bmp`), all
+4-bit indexed BMP (`adafruit_imageload.load()` / `displayio.OnDiskBitmap()`,
+one badge in RAM at a time). No PNG, no network round-trip, no server.
+
+Two build tools produce `lib/logos/`, and both can coexist:
+
+- `tools/gen_badges.py` (host-only, stdlib-only, Pillow-free): draws
+  non-trademarked 24×24 letter-mark badges (IATA/ICAO code, hand-drawn 3×5
+  font, 3-color palette — index 0 black, 1 tile background, 2 mark color;
+  354 bytes each). This is every airline's badge by default and remains the
+  fallback for any airline the next tool hasn't covered.
+- `tools/convert_logos.py` (host-only, needs Pillow + cairosvg for SVG
+  sources — issue #18): converts a real sourced logo image
+  (`tools/logo_sources/<key>.{svg,png,...}`) into the same BMP container,
+  fit to its own aspect ratio (longest side ≤ 48 px, the sec. 9 slot budget,
+  not forced square), with an 8-color palette lerped from black (index 0) to
+  that airline's existing `AIRLINES` accent color (index 7) instead of the
+  source's own brand color — several official brand hex values (UPS's,
+  Lufthansa's) are near-black and unreadable against the panel's black
+  background, while `AIRLINES`'s colors were already picked to be legible
+  there. The extra palette steps (vs. the letter-mark's 3) are what keep a
+  logo's thin strokes and antialiasing from collapsing into a blob at this
+  size; `lib/dim.py`'s `scale_palette()` rescales a palette of any length the
+  same way, so night-mode dimming needs no changes for either badge type.
+
+Priority is automatic and needs no runtime code: `lib/enrich.py:badge_path()`
+is a direct `lib/logos/<key>.bmp` path lookup with no separate resolution
+step, so whichever tool last wrote that file is what loads. The two tools
+stay consistent via `tools/logo_sources/sources.json`, a manifest
+`{icao: source_filename}` that `convert_logos.py` writes and `gen_badges.py`
+reads (`real_logo_keys()`) so that re-running `gen_badges.py` alone never
+overwrites or prunes a real logo — it just skips those keys. Re-running
+`convert_logos.py` (`--dir tools/logo_sources`) after `gen_badges.py` is what
+actually re-asserts a real logo's priority if a key's letter-mark badge was
+ever regenerated in between.
+
+As of this writing, 15 of the 44 `AIRLINES` entries have a real logo (issue
+#18: American, Delta, United, Southwest, JetBlue, FedEx, UPS, Air Canada,
+British Airways, Lufthansa, KLM, Air France, Emirates, Qatar Airways,
+Turkish) sourced from Simple Icons (CC0-licensed simplified brand marks,
+`cdn.jsdelivr.net/npm/simple-icons`); the remaining 29 plus the generic
+fallback stay on the letter-mark generator. All 50 files together are under
+30 KB; on the board's 512-byte FAT clusters that's comfortably inside the
+8 MB flash.
+
+**Licensing**: this is the project owner's personal, non-commercial build
+(issue #18). The owner has explicitly decided not to pursue trademark
+clearance for shipping real airline logos on it, overriding sec. 2's
+original "no airline trademark artwork" non-goal for this reason alone —
+that is a stated project decision, not legal advice, and not something this
+repo attempts to justify further. The letter-mark generator is kept
+specifically so any fork or reuse that does care about that can drop back to
+it (delete `tools/logo_sources/sources.json`, or the individual keys in it,
+and re-run `tools/gen_badges.py`) without losing badge coverage for any
+airline.
 
 ### Rate limits
 
@@ -457,15 +505,16 @@ Layout (pixel budget):
 ```
 
 - Badge: local `lib/logos/<key>.bmp`, loaded via `adafruit_imageload.load()`
-  or `displayio.OnDiskBitmap()` (§8, issue #2). The current set
-  (`tools/gen_badges.py`) generates non-trademarked 24×24 letter-mark badges;
-  the layout actually has room for up to **48×48**. Issue #18 tracks sourcing
-  real carrier logos at that size, with the generated letter-mark badge kept
-  as a per-airline/build fallback (not a wholesale replacement) given the
-  licensing considerations of shipping real logos. Register one badge palette
-  in `lib/dim.py` and overwrite its colours on each hero swap
-  (`Dimmer.add_palette` only ever adds, so swapping badges by adding a fresh
-  palette every poll would leak memory)
+  or `displayio.OnDiskBitmap()` (§8, issue #2). Up to **48×48**: a real
+  sourced carrier logo (`tools/convert_logos.py`, issue #18) where one exists
+  (15/44 so far), else a generated 24×24 letter-mark (`tools/gen_badges.py`)
+  — see §8 Badges for the licensing note and how the two coexist. Register
+  one badge palette in `lib/dim.py` and overwrite its colours on each hero
+  swap (`Dimmer.add_palette` only ever adds, so swapping badges by adding a
+  fresh palette every poll would leak memory) — note a real logo's palette
+  is longer (8 entries) than a letter-mark's (3), so this still-to-build
+  wiring needs to size that registered palette to the badge actually loaded
+  (e.g. re-registering per swap) rather than assume a fixed length
 - Font: `terminalio.FONT` or a bundled 5×7 / 6×12 bitmap font
 - Colors: white text, dim gray labels, badge as-is
 - Sleep: empty group / brightness 0
@@ -631,7 +680,8 @@ lib/dim.py
 lib/hero.py
 lib/enrich.py        # new (issue #2: on-device airline lookup)
 lib/filters.py       # new (issue #2: on-device heli/mil/ga filters)
-lib/logos/*.bmp       # new, generated (issue #2: on-device badges, not fetched)
+lib/logos/*.bmp       # new, generated (issue #2: on-device badges, not fetched;
+                       #   issue #18: real logo where sourced, else letter-mark)
 lib/card.py          # new
 lib/net.py           # new
 lib/wifisettings.py  # new (issue #11: AP-mode settings.toml Wi-Fi writer)
@@ -639,7 +689,9 @@ lib/setupscreen.py   # new (issue #11: panel setup-AP credentials screen)
 lib/linkwatch.py     # new (station Wi-Fi drop detection + bounded reconnect)
 lib/httpclient.py    # new (shared, always-closing adafruit_requests client for lib/net.py)
 lib/captiveportal.py # new (issue #21: AP-mode captive-portal DNS responder)
-tools/gen_badges.py  # new, host-only (generates lib/logos/*.bmp)
+tools/gen_badges.py     # new, host-only (generates lib/logos/*.bmp letter-marks)
+tools/convert_logos.py  # new, host-only (issue #18: real logos -> lib/logos/*.bmp)
+tools/logo_sources/     # new (issue #18: sourced logo images + sources.json manifest)
 tests/test_enrich_filters.py    # host-only
 tests/test_hero.py              # host-only
 tests/test_prefs.py             # host-only (prefs round trip, .bak, clamps, merge rules)

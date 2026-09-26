@@ -12,7 +12,14 @@ Each badge: 24x24, 4-bit indexed BMP (BITMAPINFOHEADER, BI_RGB, bottom-up,
 with a baked-in 3x5 pixel font scaled 2x (6x10 glyphs, 2 px gap), centered.
 Loadable with adafruit_imageload.load() or displayio.OnDiskBitmap; the
 3-color palette is what lib/dim.py rescales for night mode.
+
+Issue #18: for airlines with a real logo sourced via tools/convert_logos.py
+(recorded in tools/logo_sources/sources.json), this generator does NOT write
+or prune lib/logos/<key>.bmp -- those files are that other tool's output, at
+a different size/palette length, and must survive a re-run of this script.
+This script only fills in the letter-mark fallback for everything else.
 """
+import json
 import os
 import struct
 import sys
@@ -22,6 +29,22 @@ ROOT = os.path.join(HERE, "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 
 from enrich import AIRLINES, UNKNOWN_KEY  # noqa: E402
+
+SOURCES_MANIFEST = os.path.join(HERE, "logo_sources", "sources.json")
+
+
+def real_logo_keys():
+    """Lowercase ICAO keys that have a real logo (tools/convert_logos.py output).
+
+    Reads tools/logo_sources/sources.json if present; {} (no real logos yet,
+    or the file is simply missing) leaves today's all-letter-mark behavior
+    unchanged.
+    """
+    try:
+        with open(SOURCES_MANIFEST) as f:
+            return set(json.load(f))
+    except (OSError, ValueError):
+        return set()
 
 SIZE = 24          # badge is SIZE x SIZE px
 SCALE = 2          # 3x5 font drawn at 2x -> 6x10 glyphs
@@ -163,9 +186,15 @@ def bmp4(px, colors):
     return file_hdr + dib + pal + bytes(img)
 
 
-def badges():
-    """Yield (filename, bytes) for every badge, fallback last."""
+def badges(skip=frozenset()):
+    """Yield (filename, bytes) for every letter-mark badge, fallback last.
+
+    skip: lowercase ICAO keys to leave out entirely (real-logo airlines --
+    tools/convert_logos.py owns their lib/logos/<key>.bmp instead).
+    """
     for icao in sorted(AIRLINES):
+        if icao.lower() in skip:
+            continue
         _name, mark, bg = AIRLINES[icao]
         yield icao.lower() + ".bmp", bmp4(mark_pixels(mark), [BLACK, bg, text_color(bg)])
     yield UNKNOWN_KEY + ".bmp", bmp4(plane_pixels(), [BLACK, UNKNOWN_BG, WHITE])
@@ -174,9 +203,10 @@ def badges():
 def main(out_dir):
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
-    keep = set()
+    real = real_logo_keys()
+    keep = set(k + ".bmp" for k in real)    # don't prune convert_logos.py's output
     total = 0
-    for name, data in badges():
+    for name, data in badges(skip=real):
         with open(os.path.join(out_dir, name), "wb") as f:
             f.write(data)
         keep.add(name)
@@ -184,7 +214,8 @@ def main(out_dir):
     for name in os.listdir(out_dir):       # drop badges for removed airlines
         if name.endswith(".bmp") and name not in keep:
             os.remove(os.path.join(out_dir, name))
-    print("wrote %d badges, %d bytes -> %s" % (len(keep), total, out_dir))
+    print("wrote %d letter-mark badges, %d bytes -> %s (%d real logos left untouched)"
+          % (len(keep) - len(real), total, out_dir, len(real)))
 
 
 if __name__ == "__main__":

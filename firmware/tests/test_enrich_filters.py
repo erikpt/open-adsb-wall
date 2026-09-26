@@ -14,6 +14,7 @@ ROOT = os.path.join(HERE, "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
+import convert_logos  # noqa: E402
 import enrich  # noqa: E402
 import filters  # noqa: E402
 import gen_badges  # noqa: E402
@@ -22,6 +23,7 @@ from filters import MIL_RANGES, apply, hidden, is_ga, is_heli, is_mil  # noqa: E
 from hero import candidates  # noqa: E402
 
 LOGOS = os.path.join(ROOT, "lib", "logos")
+SOURCES = os.path.join(ROOT, "tools", "logo_sources")
 ALL_ON = {"hide_heli": True, "hide_mil": True, "hide_ga": True}
 
 
@@ -106,34 +108,71 @@ def test_apply_with_hero_candidates():
     assert [x["cs"] for x in apply(cands, {"hide_ga": True})] == ["SWA1234", "N911LF", "RCH821"]
 
 
-def _parse_bmp(data):
+def _parse_bmp(data, expect=None):
+    """expect: optional (w, h, used) to assert exactly (letter-mark badges);
+    omitted for a real logo, whose size/palette length vary per source."""
     magic, fsize, _r1, _r2, off = struct.unpack_from("<2sIHHI", data, 0)
     hdr, w, h, planes, bpp, comp, isize, _xr, _yr, used, _imp = \
         struct.unpack_from("<IiiHHIIiiII", data, 14)
     assert magic == b"BM" and fsize == len(data) and hdr == 40 and planes == 1
-    assert (w, h, bpp, comp, used) == (24, 24, 4, 0, 3), (w, h, bpp, comp, used)
-    assert off == 14 + 40 + 4 * used and isize == 12 * 24 == len(data) - off
+    assert bpp == 4 and comp == 0, (bpp, comp)          # 4-bit indexed, uncompressed
+    if expect is not None:
+        assert (w, h, used) == expect, (w, h, used)
+    row_bytes = ((w * 4 + 31) // 32) * 4
+    assert off == 14 + 40 + 4 * used and isize == row_bytes * h == len(data) - off
     pal = [struct.unpack_from("<BBBB", data, 54 + 4 * i) for i in range(used)]
-    return [(r << 16) | (g << 8) | b for b, g, r, _ in pal]
+    return w, h, [(r << 16) | (g << 8) | b for b, g, r, _ in pal]
 
 
 def test_badges_committed_and_current():
-    want = dict(gen_badges.badges())
-    assert set(want) == set(k.lower() + ".bmp" for k in AIRLINES) | {UNKNOWN_KEY + ".bmp"}
+    """lib/logos/*.bmp: letter-mark fallbacks match tools/gen_badges.py byte
+    for byte; real logos (issue #18: tools/convert_logos.py) are checked
+    structurally instead, since their size/palette differ per source image,
+    but still exactly reproducible from their committed source."""
+    real = gen_badges.real_logo_keys()
+    want = dict(gen_badges.badges(skip=real))
+    all_names = set(k.lower() + ".bmp" for k in AIRLINES) | {UNKNOWN_KEY + ".bmp"}
+    real_names = set(k + ".bmp" for k in real)
+    assert real_names <= all_names, real_names - all_names
+    assert set(want) == all_names - real_names
     on_disk = sorted(n for n in os.listdir(LOGOS) if n.endswith(".bmp"))
-    assert on_disk == sorted(want), "lib/logos out of date: run python3 tools/gen_badges.py"
+    assert on_disk == sorted(set(want) | real_names), \
+        "lib/logos out of date: run python3 tools/gen_badges.py / tools/convert_logos.py"
+
     total = 0
     for name, data in want.items():
         with open(os.path.join(LOGOS, name), "rb") as f:
             got = f.read()
         assert got == data, name + " stale: run python3 tools/gen_badges.py"
-        pal = _parse_bmp(got)
+        _w, _h, pal = _parse_bmp(got, expect=(24, 24, 3))
         assert pal[0] == 0x000000
         if name != UNKNOWN_KEY + ".bmp":
             assert pal[1] == AIRLINES[name[:-4].upper()][2]
         total += len(got)
+
+    # real logos: reproducible from tools/logo_sources/, small indexed palette,
+    # within the sec. 9 48x48 badge-slot budget
+    manifest = convert_logos._load_manifest()
+    assert set(manifest) == real, (manifest, real)
+    for icao, src_name in manifest.items():
+        assert icao.upper() in AIRLINES, icao
+        src_path = os.path.join(SOURCES, src_name)
+        assert os.path.isfile(src_path), src_path
+        with open(os.path.join(LOGOS, icao + ".bmp"), "rb") as f:
+            got = f.read()
+        data, w, h = convert_logos.convert(icao, src_path)
+        assert got == data, icao + ".bmp stale: run python3 tools/convert_logos.py --dir tools/logo_sources"
+        pw, ph, pal = _parse_bmp(got)
+        assert (pw, ph) == (w, h)
+        assert 1 <= pw <= 48 and 1 <= ph <= 48, (icao, pw, ph)
+        assert 2 <= len(pal) <= 16, (icao, len(pal))    # 4-bit indexed ceiling
+        assert pal[0] == 0x000000, (icao, pal[0])       # index 0 always black
+        assert pal[-1] == AIRLINES[icao.upper()][2], (icao, pal[-1])  # AIRLINES accent, not source's own color
+        total += len(got)
+
     assert total < 64 * 1024, total
-    # generator into a temp dir also works (and prunes stray files)
+    # generator into a temp dir also works (and prunes stray files, but leaves
+    # real logos' filenames alone even though it doesn't write them there)
     tmp = tempfile.mkdtemp()
     open(os.path.join(tmp, "old.bmp"), "wb").close()
     gen_badges.main(tmp)
@@ -168,13 +207,24 @@ def test_badges_decode_with_imageload():
         def __setitem__(self, i, v):
             self.c[i] = (v[0] << 16) | (v[1] << 8) | v[2]
 
+    real = gen_badges.real_logo_keys()
     for icao, (_n, mark, bg) in AIRLINES.items():
+        if icao.lower() in real:
+            continue   # real logo: different size/palette, checked below
         with open(os.path.join(LOGOS, icao.lower() + ".bmp"), "rb") as f:
             bmp, pal = adafruit_imageload.load(f, bitmap=Bmp, palette=Pal)
         assert (bmp.w, bmp.h, bmp.n) == (24, 24, 3)
         assert pal.c == [0, bg, gen_badges.text_color(bg)], (icao, pal.c)
         assert bmp.px[0] == 0 and bmp.px[24 * 12] == 1   # corner black, left edge bg
         assert bmp.px == [v for row in gen_badges.mark_pixels(mark) for v in row], icao
+
+    # real logos (issue #18): same loader, just a variable size/palette length
+    for icao in real:
+        with open(os.path.join(LOGOS, icao + ".bmp"), "rb") as f:
+            bmp, pal = adafruit_imageload.load(f, bitmap=Bmp, palette=Pal)
+        assert bmp.w <= 48 and bmp.h <= 48 and bmp.n == len(pal.c)
+        assert pal.c[0] == 0 and pal.c[-1] == AIRLINES[icao.upper()][2], icao
+        assert len(bmp.px) == bmp.w * bmp.h
 
 
 if __name__ == "__main__":
