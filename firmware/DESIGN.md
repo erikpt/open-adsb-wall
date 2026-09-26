@@ -437,14 +437,50 @@ overwrites or prunes a real logo — it just skips those keys. Re-running
 actually re-asserts a real logo's priority if a key's letter-mark badge was
 ever regenerated in between.
 
-As of this writing, 15 of the 44 `AIRLINES` entries have a real logo (issue
-#18: American, Delta, United, Southwest, JetBlue, FedEx, UPS, Air Canada,
-British Airways, Lufthansa, KLM, Air France, Emirates, Qatar Airways,
-Turkish) sourced from Simple Icons (CC0-licensed simplified brand marks,
-`cdn.jsdelivr.net/npm/simple-icons`); the remaining 29 plus the generic
-fallback stay on the letter-mark generator. All 50 files together are under
-30 KB; on the board's 512-byte FAT clusters that's comfortably inside the
-8 MB flash.
+As of this writing, 49 of the 49 `AIRLINES` entries have a real logo. The
+first 15 (issue #18, initial pass: American, Delta, United, Southwest,
+JetBlue, FedEx, UPS, Air Canada, British Airways, Lufthansa, KLM, Air France,
+Emirates, Qatar Airways, Turkish) came from Simple Icons (CC0-licensed
+simplified brand marks, `cdn.jsdelivr.net/npm/simple-icons`) and go through
+`convert_logos.py`'s silhouette mode (single-color glyph, tinted to the
+`AIRLINES` accent). The remaining 34 (Alaska, Spirit, Frontier, Allegiant,
+Hawaiian, Sun Country, Avelo, Breeze, SkyWest, Envoy, Republic, Endeavor,
+PSA, Mesa, Horizon, Piedmont, GoJet, Air Wisconsin, CommutAir, Cape Air,
+Atlas Air, ABX Air, ATI, Kalitta, Polar Air Cargo, Amerijet, Omni Air Intl,
+National, NetJets, Flexjet, WestJet, Aeromexico, Viva Aerobus, Volaris) came
+from `img.logo.dev/<domain>?format=png` (a per-carrier domain lookup, using
+logo.dev's publishable demo token documented on their own site — no account
+of ours) and go through the *photo* mode instead: these are raster marks
+that carry their own real brand colors, so (unlike the silhouette batch)
+they keep the source's colors rather than the `AIRLINES` accent tint. This
+is the first real exercise of `convert_photo()`; its docstring's "no such
+source is committed yet" is now stale. Every domain was verified to actually
+resolve to that airline's own site (or logo.dev's cached asset for it)
+before use — three of the issue's guessed domains turned out wrong or dead
+and were swapped for the real one: Omni Air International's actual site is
+`oai.aero`, not `omniairintl.com` (parked/IIS-default); National Airlines
+(N8/NCR)'s is `nationalairlines.com`, not `nationalair.com` (a same-named,
+unrelated business); ATI/Air Transport International (8C/ATN)'s is
+`airtransport.cc`, not `atiacmi.com` (unreachable) or the `atiaviation.com`
+near-miss (a different, unrelated "ATI Aviation Services"). Horizon Air's
+`horizonair.com` legitimately resolves to the same Alaska Airlines "Eskimo"
+mark Alaska itself uses — Horizon retired its independent brand in 2011 and
+now flies co-branded as "Alaska Horizon" — so reusing that art for `qxe` is
+correct, not a scraping error. All 49 files together are a little over 50 KB;
+on the board's 512-byte FAT clusters that's comfortably inside the 8 MB
+flash.
+
+Sources tried that did *not* pan out, for the next carrier that needs one:
+Simple Icons only covers the first 15 (it's a general tech/consumer brand
+set, not an airline-specific one — none of the remaining 34 appear in it);
+`github.com/gilbarbara/logos` is the same kind of tech-brand set and has no
+airline matches either; `worldvectorlogo.com` 403s every page (search and
+logo, several query shapes tried, several browser user-agents) behind a
+Cloudflare bot challenge; `svgrepo.com` 403s behind a Vercel bot checkpoint;
+`cdn.brandfetch.io/<domain>` now 302-redirects to a "client ID required"
+notice — the old unauthenticated quick-logo trick is dead; `img.logo.dev`
+*without* a token 401s, but `?token=<their published demo token>&format=png`
+works well and was this batch's actual source.
 
 **Licensing**: this is the project owner's personal, non-commercial build
 (issue #18). The owner has explicitly decided not to pursue trademark
@@ -507,8 +543,11 @@ Layout (pixel budget):
 - Badge: local `lib/logos/<key>.bmp`, loaded via `adafruit_imageload.load()`
   or `displayio.OnDiskBitmap()` (§8, issue #2). Up to **48×48**: a real
   sourced carrier logo (`tools/convert_logos.py`, issue #18) where one exists
-  (15/44 so far), else a generated 24×24 letter-mark (`tools/gen_badges.py`)
-  — see §8 Badges for the licensing note and how the two coexist. Register
+  (49/49 `AIRLINES` entries, as of this writing), else a generated 24×24
+  letter-mark (`tools/gen_badges.py`) — still the fallback for the generic
+  `_unk` badge and for any airline added to `AIRLINES` before a real logo is
+  sourced for it. See §8 Badges for the licensing note and how the two
+  coexist. Register
   one badge palette in `lib/dim.py` and overwrite its colours on each hero
   swap (`Dimmer.add_palette` only ever adds, so swapping badges by adding a
   fresh palette every poll would leak memory) — note a real logo's palette

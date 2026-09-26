@@ -167,7 +167,14 @@ def test_badges_committed_and_current():
         assert 1 <= pw <= 48 and 1 <= ph <= 48, (icao, pw, ph)
         assert 2 <= len(pal) <= 16, (icao, len(pal))    # 4-bit indexed ceiling
         assert pal[0] == 0x000000, (icao, pal[0])       # index 0 always black
-        assert pal[-1] == AIRLINES[icao.upper()][2], (icao, pal[-1])  # AIRLINES accent, not source's own color
+        # silhouette mode (single-color glyph) tints black->AIRLINES accent, so
+        # its last palette entry is that accent exactly; photo mode (a raster
+        # logo with its own real brand colors, issue #18's 34-carrier batch)
+        # keeps the source's own colors instead -- see convert_logos.py's
+        # docstring for why. Only assert the accent match for the mode it
+        # actually applies to.
+        if convert_logos.detect_mode(src_path) == "silhouette":
+            assert pal[-1] == AIRLINES[icao.upper()][2], (icao, pal[-1])
         total += len(got)
 
     assert total < 64 * 1024, total
@@ -219,11 +226,18 @@ def test_badges_decode_with_imageload():
         assert bmp.px == [v for row in gen_badges.mark_pixels(mark) for v in row], icao
 
     # real logos (issue #18): same loader, just a variable size/palette length
+    manifest = convert_logos._load_manifest()
     for icao in real:
         with open(os.path.join(LOGOS, icao + ".bmp"), "rb") as f:
             bmp, pal = adafruit_imageload.load(f, bitmap=Bmp, palette=Pal)
         assert bmp.w <= 48 and bmp.h <= 48 and bmp.n == len(pal.c)
-        assert pal.c[0] == 0 and pal.c[-1] == AIRLINES[icao.upper()][2], icao
+        assert pal.c[0] == 0, icao
+        # see test_badges_committed_and_current: only silhouette mode tints
+        # its last palette entry to the AIRLINES accent -- photo mode keeps
+        # the source's own colors.
+        src_path = os.path.join(SOURCES, manifest[icao])
+        if convert_logos.detect_mode(src_path) == "silhouette":
+            assert pal.c[-1] == AIRLINES[icao.upper()][2], icao
         assert len(bmp.px) == bmp.w * bmp.h
 
 
