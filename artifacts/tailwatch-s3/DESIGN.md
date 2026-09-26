@@ -68,8 +68,8 @@ File: `/prefs.json` with `/prefs.bak` on write.
 
 ```json
 {
-  "lat": 30.2094,
-  "lon": -95.7508,
+  "lat": 30.0000,
+  "lon": -95.0000,
   "nm": 10,
   "hide_heli": true,
   "hide_ga": false,

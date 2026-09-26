@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import hero  # noqa: E402
 from hero import Hero, candidates, select, stale_limit, distance_mi  # noqa: E402
 
-PIN = (30.2094, -95.7508)
+PIN = (30.0000, -95.0000)
 
 
 def c(hx, dist, alt=3000.0, spd=150.0, age=0):

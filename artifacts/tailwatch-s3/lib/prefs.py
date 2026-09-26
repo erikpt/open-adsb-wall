@@ -4,8 +4,8 @@ import os
 PATH = "/prefs.json"
 BACKUP = "/prefs.bak"
 DEFAULTS = {
-    "lat": 30.2094,
-    "lon": -95.7508,
+    "lat": 30.0000,
+    "lon": -95.0000,
     "nm": 10,
     "hide_heli": True,
     "hide_ga": False,
