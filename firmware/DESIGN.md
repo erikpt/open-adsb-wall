@@ -32,8 +32,9 @@ Two physical units will exist (owner + friend). Each unit owns its own lat/lon a
 | Controller | Adafruit MatrixPortal S3 (ESP32-S3, USB-C, HUB75, Wi-Fi) |
 | Panel | P2-1515, 128×64, 256×128 mm, 1/32 scan, HUB75 |
 | Panel power | External 5.0 V bench/PSU, **direct to the panel's own power input**, ~3 A measured full white (~15 W), budget 4–5 A |
-| S3 power | USB-C only (board + logic). Do not back-feed USB from panel 5 V |
+| S3 power | USB-C only (board + logic) — its screw terminals are output-only, never a power input (see footgun below). Can share the panel's PSU via a second USB-C feed; do not wire the panel 5 V onto the S3's screw terminals |
 | Wiring | HUB75 data from S3; panel 5 V/GND from PSU **wired to the panel itself**; common ground optional if noise appears |
+| S3 power cable | Bare-wire-to-USB-C pigtail (5V, 3–5 A), spliced onto the same PSU as the panel rather than a second USB-C brick (see footgun note below) |
 
 Firmware must never assume USB can power the LEDs.
 
@@ -46,6 +47,18 @@ entirely dependent on USB, and unplugging USB-C kills it even though a beefy ext
 supply is nominally connected. There is no actual backfeed in this case -- the panel
 simply never had independent power. Always verify the PSU leads land on the panel's own
 power pads/terminal, never the MatrixPortal's screw lugs.
+
+**Powering both from one supply.** The S3's screw terminals being output-only doesn't
+mean the board must run off a separate USB-C wall charger -- it means the board has to
+be fed through its USB-C port specifically, same as always, just sourced from the same
+PSU as the panel instead of a second brick. Land the PSU's 5V/GND leads on a small
+junction (splice or terminal block) with two branches out of it: one straight to the
+panel's own power input (as above, carries the bulk of the current), and one through a
+**bare-wire-to-USB-C pigtail cable** into the MatrixPortal's USB-C port. That pigtail is
+passive -- two wires to VBUS/GND, no PD negotiation -- so it presents the same fixed 5V
+the board would see from any USB-C charger. Size the PSU for the panel's worst-case draw
+plus the board's (well under 1A even with Wi-Fi active); the panel dominates the budget
+either way. See the table above for a specific cable.
 
 ## 4. Architecture
 
