@@ -437,18 +437,19 @@ overwrites or prunes a real logo — it just skips those keys. Re-running
 actually re-asserts a real logo's priority if a key's letter-mark badge was
 ever regenerated in between.
 
-As of this writing, 49 of the 49 `AIRLINES` entries have a real logo. The
-first 15 (issue #18, initial pass: American, Delta, United, Southwest,
-JetBlue, FedEx, UPS, Air Canada, British Airways, Lufthansa, KLM, Air France,
-Emirates, Qatar Airways, Turkish) came from Simple Icons (CC0-licensed
-simplified brand marks, `cdn.jsdelivr.net/npm/simple-icons`) and go through
-`convert_logos.py`'s silhouette mode (single-color glyph, tinted to the
-`AIRLINES` accent). The remaining 34 (Alaska, Spirit, Frontier, Allegiant,
-Hawaiian, Sun Country, Avelo, Breeze, SkyWest, Envoy, Republic, Endeavor,
-PSA, Mesa, Horizon, Piedmont, GoJet, Air Wisconsin, CommutAir, Cape Air,
-Atlas Air, ABX Air, ATI, Kalitta, Polar Air Cargo, Amerijet, Omni Air Intl,
-National, NetJets, Flexjet, WestJet, Aeromexico, Viva Aerobus, Volaris) came
-from `img.logo.dev/<domain>?format=png` (a per-carrier domain lookup, using
+As of this writing, 49 of the 49 `AIRLINES` entries have a real logo. 13 of
+the initial issue #18 pass (American, United, Southwest, JetBlue, FedEx, UPS,
+Air Canada, British Airways, Lufthansa, KLM, Emirates, Qatar Airways, Turkish)
+came from Simple Icons (CC0-licensed simplified brand marks,
+`cdn.jsdelivr.net/npm/simple-icons`) and go through `convert_logos.py`'s
+silhouette mode (single-color glyph, tinted to the `AIRLINES` accent). The
+remaining 36 (the initial pass's Air France and Delta, plus the 34 sourced
+afterward: Alaska, Spirit, Frontier, Allegiant, Hawaiian, Sun Country, Avelo,
+Breeze, SkyWest, Envoy, Republic, Endeavor, PSA, Mesa, Horizon, Piedmont,
+GoJet, Air Wisconsin, CommutAir, Cape Air, Atlas Air, ABX Air, ATI, Kalitta,
+Polar Air Cargo, Amerijet, Omni Air Intl, National, NetJets, Flexjet, WestJet,
+Aeromexico, Viva Aerobus, Volaris) came from `img.logo.dev/<domain>?format=png`
+(a per-carrier domain lookup, using
 logo.dev's publishable demo token documented on their own site — no account
 of ours) and go through the *photo* mode instead: these are raster marks
 that carry their own real brand colors, so (unlike the silhouette batch)
@@ -466,9 +467,44 @@ near-miss (a different, unrelated "ATI Aviation Services"). Horizon Air's
 `horizonair.com` legitimately resolves to the same Alaska Airlines "Eskimo"
 mark Alaska itself uses — Horizon retired its independent brand in 2011 and
 now flies co-branded as "Alaska Horizon" — so reusing that art for `qxe` is
-correct, not a scraping error. All 49 files together are a little over 50 KB;
-on the board's 512-byte FAT clusters that's comfortably inside the 8 MB
-flash.
+correct, not a scraping error.
+
+Air France and Delta moved from the initial Simple Icons pass to
+logo.dev/photo mode on a later review of all 15 (user-flagged). Two distinct
+problems turned up, and the same review deliberately checked all 15 against
+both, not just re-examining the one flagged carrier:
+
+- **Wrong mark**: Simple Icons' `afr.svg` was just the loose diagonal accent
+  slash with no wordmark or color cue, tinted to a plain blue that doesn't
+  match Air France's actual red/navy branding — on its own it didn't read as
+  Air France's mark at all. `airfrance.com`'s logo.dev fetch (the same slash
+  plus the "AIRFRANCE" wordmark, in the airline's real red) replaced it; the
+  wordmark all but disappears at the 48 px badge size (it's a thin,
+  small-relative-to-the-icon typeface that photo mode's 8-step quantizing
+  washes out — a known photo-mode limitation, see `convert_photo()`'s
+  docstring), but the red slash alone is already a correct, recognizable
+  improvement over the old shape and color.
+- **Wordmark lockup squeezed illegible**: silhouette mode fits a source to
+  its own aspect ratio at longest-side-48px, so a *wide* source — a full
+  wordmark, or a wordmark+icon lockup — collapses to a sliver instead of
+  shrinking evenly. Simple Icons' `dal.svg` is Delta's full "DELTA" wordmark
+  next to the widget triangle, which came out **48×8px**: five letters in an
+   8px-tall strip, illegible on the actual LED panel regardless of how
+  accurate the shapes are. `delta.com`'s logo.dev fetch is the widget
+  triangle alone (no wordmark) and converts at a proper 48×48 — that
+  replaced it.
+
+The other 13 Simple Icons silhouettes were checked the same way — rendered
+against a logo.dev fetch of the same airline, and their badge's actual output
+aspect ratio/height checked as a fast signal for a hidden wordmark-lockup
+problem (the `dal` failure mode: a single-digit output height from a source
+with letterforms in it). None of the other 13 have that shape (heights range
+28–48px; the two shortest, FedEx at 13px and JetBlue at 16px, are inherently
+wordmark-only brands with no separate icon mark to substitute, and both are
+still legible at that height — nowhere near `dal`'s 8px). All 13 were judged
+fine as plausible, correctly-shaped, legible versions of the real mark and
+left untouched. All 49 files together are a little over 50 KB; on the
+board's 512-byte FAT clusters that's comfortably inside the 8 MB flash.
 
 Sources tried that did *not* pan out, for the next carrier that needs one:
 Simple Icons only covers the first 15 (it's a general tech/consumer brand
