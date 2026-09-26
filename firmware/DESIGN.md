@@ -13,7 +13,7 @@ This document is the spec. Do not invent product scope beyond it. Prefer small, 
 
 A wall display that shows **one live aircraft card** for traffic near a user-configured GPS point, without requiring a subscription app.
 
-Two physical units will exist (owner + friend). Each unit owns its own lat/lon and display prefs on-device. A shared cloud API supplies flight cards and logos. OpenSky (or compatible ADS-B) is the position source.
+Two physical units will exist (owner + friend). Each unit owns its own lat/lon and display prefs on-device, and assembles its own flight cards and badges locally (issue #2: no cloud tier). OpenSky (or compatible ADS-B) is the position source.
 
 ## 2. Non-goals (MVP)
 
@@ -399,19 +399,24 @@ Layout (pixel budget):
 
 ```
 +------------------+----------------------------+
-| 24×24 badge      | Airline                     |
-|                  | FLIGHT  ROUTE               |
+| up to 48×48      | Airline                     |
+| badge            | FLIGHT  ROUTE               |
 +------------------+ TYPE                        |
 | city / phase                               |
 | ALT  SPD  TRK                              |
 +--------------------------------------------+
 ```
 
-- Badge: local `lib/logos/<key>.bmp` (24×24, 4-bit indexed), loaded via
-  `adafruit_imageload.load()` or `displayio.OnDiskBitmap()` (§8, issue #2).
-  Register one badge palette in `lib/dim.py` and overwrite its colours on
-  each hero swap (`Dimmer.add_palette` only ever adds, so swapping badges by
-  adding a fresh palette every poll would leak memory)
+- Badge: local `lib/logos/<key>.bmp`, loaded via `adafruit_imageload.load()`
+  or `displayio.OnDiskBitmap()` (§8, issue #2). The current set
+  (`tools/gen_badges.py`) generates non-trademarked 24×24 letter-mark badges;
+  the layout actually has room for up to **48×48**. Issue #18 tracks sourcing
+  real carrier logos at that size, with the generated letter-mark badge kept
+  as a per-airline/build fallback (not a wholesale replacement) given the
+  licensing considerations of shipping real logos. Register one badge palette
+  in `lib/dim.py` and overwrite its colours on each hero swap
+  (`Dimmer.add_palette` only ever adds, so swapping badges by adding a fresh
+  palette every poll would leak memory)
 - Font: `terminalio.FONT` or a bundled 5×7 / 6×12 bitmap font
 - Colors: white text, dim gray labels, badge as-is
 - Sleep: empty group / brightness 0
