@@ -2,7 +2,7 @@
 
 Status: implementable MVP  
 Hardware target: Adafruit MatrixPortal S3 + indoor P2 SMD1515 128×64 HUB75 panel  
-Companion: optional Cloudflare Worker (or small VPS) for ADS-B enrichment  
+Companion: none -- the device calls OpenSky directly and assembles cards on-device (see issue #2; no cloud API)  
 Existing starter: `artifacts/tailwatch-s3/` (`code.py`, `lib/*`, `www/index.html`, `prefs.example.json`)
 
 This document is the spec. Do not invent product scope beyond it. Prefer small, working slices over frameworks.
@@ -43,23 +43,20 @@ Firmware must never assume USB can power the LEDs.
 [Phone browser]
     |  http://<s3-ip>/  or 192.168.4.1  (prefs only)
 [MatrixPortal S3]
-    |  GET /v1/nearby?lat&lon&nm   Authorization: Bearer <token>
-    |  GET /v1/logo/<id>           raw 16×16 RGB565
-[Cloud API: CF Worker or Linode]
-    |  cached cell poll
+    |  lib/net.py: GET /api/states/all?lamin&lomin&lamax&lomax&extended=1
+    |  (OpenSky token optional, only to raise the anonymous rate limit)
 [OpenSky / ADS-B]
-    + local lookup tables (aircraft type, airline prefix, airports)
+    + on-device lib/hero.py, lib/filters.py, lib/enrich.py, lib/logos/
 ```
 
-**On device (source of truth):** GPS, radius, brightness, sleep, night mode, filters, API URL, token.  
-**In cloud (shared, stateless except cache):** positions, enrichment, logos.  
-**Never store friend lat/lon as the only copy in the cloud** — cloud may see lat/lon as query params for a fetch, and may cache a grid cell, but the device prefs file wins after reboot.
+No cloud tier (issue #2): each device polls OpenSky directly with its own
+bbox and assembles/filters/enriches the card locally.
+
+**On device (everything; no cloud copy of anything):** GPS, radius, brightness, sleep, night mode, filters, OpenSky token (optional), positions (fetched live, never persisted), enrichment tables, badges.
 
 ## 5. Device identity (two units)
 
-- `device_token` stored in `/prefs.json` on each S3
-- Cloud validates token (rate-limit per token)
-- Tokens do not share prefs
+- Each unit's `/prefs.json` (lat/lon, filters, OpenSky token) is entirely local -- nothing is shared or centrally stored, so there's no cross-device isolation to get wrong
 - Same firmware image on both units
 - Optional `device_id` printed on serial at boot for support
 
@@ -157,17 +154,16 @@ If `CIRCUITPY_WIFI_SSID` empty or join fails for 20 s:
 
 Hold BOOT 5 s to clear Wi-Fi settings is a stretch goal.
 
-## 8. Cloud API
+## 8. On-device card assembly (was "Cloud API")
 
-Base URL from `prefs.api`. HTTPS only.
+Superseded by issue #2: there is no server. `lib/net.py` (to build) calls
+OpenSky's `/api/states/all` directly with the device's own bbox (`lib/bbox.py`)
+and `extended=1`, then `lib/hero.py`, `lib/filters.py`, and `lib/enrich.py`
+assemble a card with this same shape on-device, for `lib/card.py` to render.
+`prefs.api`/`prefs.token` (an OpenSky account, not a "cloud API" of ours) are
+only needed if OpenSky's anonymous rate limit proves too low in practice.
 
-### `GET /v1/nearby`
-
-Query: `lat` `lon` `nm`  
-Optional: `hide_heli` `hide_ga` `hide_mil`  
-Header: `Authorization: Bearer <token>`
-
-Response (always small):
+Card shape (assembled on-device, not an HTTP response):
 
 ```json
 {
@@ -188,7 +184,10 @@ Response (always small):
 ```
 
 Empty sky: `ok: true`, `flight: null`.  
-Errors: HTTP 401/429/502 with `{"ok": false, "error": "..."}`.
+Fetch failure (OpenSky unreachable, rate-limited, or malformed response):
+`lib/net.py` returns `None`/raises rather than an HTTP error code; `lib/hero.py`
+treats a failed poll as "no fresh candidates" (see `Hero.expired()`), not as
+"the hero left the box".
 
 Hero aircraft selection (on-device, `lib/hero.py`; see issue #2 — the S3 calls
 OpenSky directly, so this runs on-device instead of on the server as originally
@@ -255,15 +254,14 @@ is loaded into RAM at a time (~288 bytes). `lib/enrich.py:badge_path()` maps a
 lookup to its file path; `lib/card.py` loads it with `adafruit_imageload.load()`
 or `displayio.OnDiskBitmap()`. No PNG, no network round-trip, no server.
 
-### Caching
+### Rate limits
 
-Snap lat/lon to a grid (~10 mi) so two nearby devices share one OpenSky fetch. TTL 10–15 s for positions, hours for hex→type. Badges need no cache: they are static files already on the drive.
-
-Do not call `states/all` without a bbox. Honor OpenSky rate limits and non-commercial terms. Store OpenSky credentials only on the server.
-
-### Worker vs VPS
-
-MVP: Cloudflare Worker + KV/R2 is enough for two devices. Linode if FlightAware AeroAPI + SQLite is added later. Coding agent should define a clean interface (`nearby(lat,lon,nm,filters) → card`) so the backend can be swapped.
+No shared cache: each device polls independently with its own bbox (the two
+owners' units are in different cities, so a shared cache never had a hit
+anyway -- see issue #2). Do not call `states/all` without a bbox. Honor
+OpenSky's rate limits and non-commercial terms; `prefs.token` (optional
+OpenSky account credentials) raises the anonymous limit if needed. Badges
+need no cache: they are static files already on the drive.
 
 ## 9. Firmware modules
 
@@ -359,24 +357,23 @@ Magnolia box, the board may be empty often (Hooks GA). Default `hide_ga: false`.
 
 ## 11. Security
 
-- Device token required for cloud
+- No cloud tier, so no device/cloud token to manage (issue #2)
 - Local UI has no auth in MVP (LAN trust). Do not expose the S3 port to WAN
-- No OpenSky password on the S3
+- OpenSky token (optional, only to raise the anonymous rate limit) lives in `/prefs.json` on-device; `GET /api/prefs` must not echo it back (issue #14, open)
 - CIRCUITPY is writable; do not put secrets in git
 
 ## 12. Implementation order (coding agent)
 
 Do these PRs/slices in order. Each slice must run on hardware or have a clear mock.
 
-1. **Harden existing prefs + UI** — POST from `application/x-www-form-urlencoded` reliably; checkbox false when unchecked; backup file; serial log of saved JSON  
-2. **Card renderer** — hardcoded Alaska/PDX-LAX style card on 128×64  
-3. **Schedule live** — sliders change brightness immediately; sleep blanks panel; sunset path uses saved lat/lon  
-4. **HTTPS client** — `poll_card()` hits `prefs.api` with token + lat/lon/nm; parse JSON; render  
-5. **Logo fetch + cache** — one logo in memory; 404 → letter avatar  
-6. **Cloud Worker** — token check, bbox, OpenSky, pick hero, return card JSON; empty-sky path  
-7. **Lookup tables** — airline prefixes + airport names + a few logos  
-8. **AP fallback** — if no Wi-Fi  
-9. **Second device** — second token, confirm prefs isolated  
+1. ~~**Harden existing prefs + UI**~~ — done (issues #4, #5)
+2. **Card renderer** — `lib/card.py`, hardcoded style card on 128×64 -- **to build**
+3. ~~**Schedule live**~~ — done (issue #7); ~~**Brightness dimming**~~ — done (issue #8)
+4. **OpenSky HTTPS client** — `lib/net.py`: `poll_card()` hits OpenSky's `/api/states/all` directly with bbox + `extended=1`, optional token; parse JSON -- **to build**
+5. ~~**Lookup tables + badges**~~ — done (issue #10: `lib/enrich.py`, `lib/filters.py`, `lib/logos/`)
+6. ~~**Hero selection**~~ — done (issue #9: `lib/hero.py`)
+7. **AP fallback** — if no Wi-Fi (issue #11, in progress)
+8. **Wire it together** — `code.py`'s poll loop calls `lib/net.py` → `lib/filters.py` → `lib/hero.py` → `lib/card.py`, replacing the current stub  
 
 Do not start a rewrite in ESP-IDF unless CircuitPython HTTPS + HTTP server cannot coexist. If it cannot, port modules 1:1 to Arduino/ESP-IDF and keep this spec.
 

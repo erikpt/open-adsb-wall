@@ -58,11 +58,12 @@ does not re-run it.
 - Night mode: off / fixed hours / after local sunset
 - Day / night / max brightness sliders
 - Filters stored: `hide_heli`, `hide_ga`, `hide_mil`
-- 10 miles each way → OpenSky-style bbox (printed to serial until the cloud API is wired)
+- 10 miles each way → OpenSky bbox (printed to serial until `lib/net.py` is wired)
+- No cloud API -- OpenSky is called directly from the device; hero selection, filters, and airline badges all run on-device (`lib/hero.py`, `lib/filters.py`, `lib/enrich.py`, `lib/logos/`)
 
 ## Next
 
-1. Point `api` at the Cloudflare/Linode worker
-2. Implement `poll_card()` as HTTPS GET `/v1/nearby`
-3. Draw the returned card with `displayio` / `terminalio`
-4. AP-mode first-boot if `CIRCUITPY_WIFI_SSID` is empty
+1. `lib/net.py`: implement `poll_card()` as an HTTPS GET to OpenSky's `/api/states/all` (bbox + `extended=1`)
+2. Draw the returned card with `displayio` / `terminalio` (`lib/card.py`)
+3. Wire `code.py`'s poll loop: `net.poll_card()` → `filters.apply()` → `hero.select()` → `card.draw()`
+4. AP-mode first-boot if `CIRCUITPY_WIFI_SSID` is empty (in progress)
