@@ -160,6 +160,16 @@
         </article>
 
       </div>
+      <div class="warning-box">
+        <strong>Wiring gotcha (confirmed on hardware):</strong> the MatrixPortal S3 has its own 5V/GND
+        screw terminals next to the HUB75 connector &mdash; these are <strong>output only</strong>,
+        wired straight to the board's USB-C 5V rail, meant for powering a small panel with no external
+        supply. Landing your external power supply's barrel-to-terminal adapter on <em>those</em>
+        terminals instead of the <em>panel's own</em> power input looks correct but isn't: the panel
+        ends up entirely dependent on USB, and goes dark the moment you unplug USB-C even though a
+        beefy external supply is nominally connected. Always wire the external supply straight to the
+        panel's own power pads, never the MatrixPortal's screw lugs.
+      </div>
       <p class="part-disclaimer">Links are for reference, not endorsements or affiliate links (we don't have any) &mdash; verify specs before buying, prices and listings change.</p>
     </div>
   </section>
