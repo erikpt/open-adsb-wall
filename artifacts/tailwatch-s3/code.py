@@ -1,6 +1,7 @@
 import time
 import json
 import os
+import gc
 import board
 import microcontroller
 import displayio
@@ -18,6 +19,8 @@ from schedule import sleeping, brightness, set_clock_synced, clock_synced, clock
 from bbox import box
 from dim import Dimmer, min_visible
 import wifisettings
+import httpclient
+from linkwatch import LinkWatch, UP as LINK_UP
 
 displayio.release_displays()
 
@@ -96,6 +99,8 @@ AP_TEXT_COLOR = 0x707070     # fixed mid-gray setup text (dimmer not used in AP 
 RESET_DELAY_S = 3.0          # let the POST /api/wifi response flush before resetting
 NTP_RETRY_S = 300            # station mode, clock not yet synced
 NTP_RESYNC_S = 86400         # station mode, daily re-sync for RTC drift
+HTTP_FAIL_LIMIT = 5          # consecutive server.poll() exceptions -> restart the server
+HTTP_RETRY_S = 30            # server failed to start: retry this often
 PW_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"  # 32 chars, no l/o/0/1
 
 
@@ -184,6 +189,16 @@ if ap_mode:
         print("setup screen", e)
 else:
     host = str(wifi.radio.ipv4_address)
+
+# Station mode only: re-join after a Wi-Fi drop and move the web UI to the
+# new address (lib/linkwatch.py). AP mode has its own idle-reboot retry.
+link = None
+if not ap_mode:
+    link = LinkWatch(
+        wifi.radio, cfg_ssid,
+        lambda: str(os.getenv("CIRCUITPY_WIFI_PASSWORD") or ""),
+        host, connect_timeout=JOIN_TIMEOUT_S,
+    )
 
 pool = socketpool.SocketPool(wifi.radio)
 _ntp = None
@@ -294,6 +309,7 @@ def get_status(request: Request):
         "clock_synced": clock_synced(),
         "clock_trusted": clock_trusted(),
         "rebooting": reset_at is not None,
+        "wifi_drops": link.drops if link is not None else 0,  # station outages since boot
     })
 
 
@@ -339,10 +355,46 @@ def start_http():
 
 
 server = start_http()
+http_fails = 0                  # consecutive server.poll() exceptions
+last_http_try = time.monotonic()
+
+
+def restart_http(why):
+    """Stop the web UI server (if any) and start a fresh one on `host`."""
+    global server, http_fails, last_http_try
+    print("http: restarting on %s (%s)" % (host, why))
+    if server is not None:
+        try:
+            server.stop()
+        except Exception as e:  # socket already dead with the old link
+            print("http stop", e)
+    server = None
+    gc.collect()
+    server = start_http()
+    http_fails = 0
+    last_http_try = time.monotonic()
 
 
 def poll_card():
-    """Replace with HTTPS GET prefs['api']/v1/nearby?... later."""
+    """Stub: returns a placeholder card. Real fetch is lib/net.py (to build).
+
+    When lib/net.py lands, its OpenSky request MUST go through
+    lib/httpclient.py -- never a bare adafruit_requests call -- so the web UI
+    server is never starved:
+
+        import httpclient
+        try:
+            data = httpclient.get_json(pool, url, headers=auth_headers)
+        except httpclient.HTTPStatusError as e:   # 429: back off e.retry_after s
+            ...
+        except Exception as e:                    # OSError / RuntimeError / TimeoutError / ValueError
+            ...                                   # keep the last good card; show NO LINK
+
+    get_json() reuses one Session (keep-alive TLS), passes timeout=4 s,
+    caps the body read at 8 s / 32 KB, and closes the response on every
+    path. Only call it while link.state == LINK_UP (the main loop already
+    gates poll_card() on that).
+    """
     b = box(prefs["lat"], prefs["lon"], prefs["nm"])
     print("box", b)
     return {
@@ -359,15 +411,43 @@ last_poll = 0
 last_bright = 0
 last_ntp_try = time.monotonic()
 while True:
-    if server is not None:
+    # Skip while the station link is down: nothing can reach the UI, and a
+    # dead listening socket would otherwise log an error every pass.
+    if server is not None and (link is None or link.state == LINK_UP):
         try:
             server.poll()
+            http_fails = 0
         except Exception as e:
+            http_fails += 1
             print("http", e)
+            if http_fails >= HTTP_FAIL_LIMIT:
+                restart_http("%d consecutive poll errors" % http_fails)
 
     now = time.monotonic()
     if reset_at is not None and now >= reset_at:
         microcontroller.reset()  # hard reset: boot.py + settings.toml re-read, fresh radio
+
+    if server is None and now - last_http_try >= HTTP_RETRY_S and (
+            link is None or link.state == LINK_UP):
+        restart_http("not running")
+
+    if link is not None and reset_at is None:
+        ev = link.tick()  # may block up to JOIN_TIMEOUT_S while reconnecting
+        if ev is not None:
+            if ev[0] == "down":
+                httpclient.reset()  # pooled outbound sockets died with the link
+            elif ev[0] == "up":
+                host = ev[2]
+                httpclient.reset()
+                restart_http("wifi up" if ev[1] == ev[2] else "ip %s -> %s" % (ev[1], ev[2]))
+                if not clock_synced():
+                    last_ntp_try = now - NTP_RETRY_S  # retry NTP now, not in up to 5 min
+            elif ev[0] == "reset":
+                # Boots, fails the ~20 s join, and comes up as the setup AP,
+                # which itself reboots to retry after AP_IDLE_RETRY_S idle.
+                microcontroller.reset()
+        now = time.monotonic()  # tick() may have blocked
+    online = link is not None and link.state == LINK_UP
 
     if ap_mode:
         # Configured network down (router rebooting, outage)? Retry it by
@@ -381,7 +461,7 @@ while True:
 
     prefs = load() if False else prefs  # UI save already updates global
 
-    if now - last_ntp_try >= (NTP_RESYNC_S if clock_synced() else NTP_RETRY_S):
+    if online and now - last_ntp_try >= (NTP_RESYNC_S if clock_synced() else NTP_RETRY_S):
         last_ntp_try = now
         sync_clock()
 
@@ -393,7 +473,7 @@ while True:
         if dimmer.apply(brightness(prefs)):
             print("brightness", dimmer.level)
 
-    if not sleeping(prefs) and now - last_poll > 15:
+    if online and not sleeping(prefs) and now - last_poll > 15:
         last_poll = now
         try:
             card = poll_card()

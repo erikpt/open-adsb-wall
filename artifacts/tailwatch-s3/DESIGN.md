@@ -151,7 +151,7 @@ exposes the filesystem.
 | `/` | GET | `www/index.html` |
 | `/api/prefs` | GET | current JSON |
 | `/api/prefs` | POST | form or JSON merge → save → apply brightness (station mode only) |
-| `/api/status` | GET | `{mode, ip, ssid, ap_ssid, networks, clock_synced, clock_trusted, rebooting}` -- never a password |
+| `/api/status` | GET | `{mode, ip, ssid, ap_ssid, networks, clock_synced, clock_trusted, rebooting, wifi_drops}` -- never a password |
 | `/api/wifi` | POST | JSON or form `{ssid, password, open}` → `lib/wifisettings.py` → `/settings.toml` → hard reset (§ AP mode below) |
 
 UI fields must match the schema in §6 (already drafted in `www/index.html`).
@@ -207,6 +207,43 @@ If `CIRCUITPY_WIFI_SSID` is empty, or joining it fails (two 10 s
   SSID configured at all, the device stays in AP mode indefinitely.
 
 Hold BOOT 5 s to clear Wi-Fi settings is a stretch goal.
+
+### Wi-Fi drop recovery (station mode)
+
+Once joined as a station, `lib/linkwatch.py:LinkWatch` (`code.py`, station mode
+only; `link = None` in AP mode) watches for a dropped link and re-joins it,
+because CircuitPython's own retries are limited and `adafruit_httpserver`
+otherwise keeps a listening socket bound to the address that just went away:
+
+- Checks `wifi.radio` every 2 s. A drop waits 10 s (grace period, so
+  CircuitPython's own few retries can run first), then makes up to 6
+  reconnect attempts with gaps 10 / 20 / 30 / 60 / 60 / 60 s between them (about
+  4 minutes total from the drop).
+- Recovered (its own `connect()`, or the radio recovering on its own) or the
+  IP changed while up (DHCP lease change) both fire an "up" event; either way
+  `code.py` restarts the HTTP server (`restart_http()`) on the current host
+  address. This covers a listening socket gone stale on the old interface even
+  when the IP didn't change, at the cost of one rebind (`adafruit_httpserver`
+  4.x sets `SO_REUSEADDR`, so rebinding port 80 works).
+- If all 6 reconnects fail, `code.py` calls `microcontroller.reset()`: the boot
+  then fails the ~20 s join and falls back to the setup AP (§ AP mode above),
+  which itself reboots to retry after `AP_IDLE_RETRY_S` idle. A long router
+  outage becomes a bounded retry loop with an always-recoverable device.
+- `server.poll()` is skipped entirely while the link is down (a dead socket
+  would otherwise log an error every pass), and NTP / the ADS-B poll are
+  gated the same way. The brightness schedule keeps running while offline.
+- The web UI server is also restarted whenever it isn't running and the link
+  is up (retried every 30 s), and after 5 consecutive `server.poll()`
+  exceptions (a fresh start clears the counter). Both apply in AP mode too.
+- Serial lines (the Wi-Fi password is never stored or printed):
+  - `wifi: link lost (ip was X); first reconnect in 10 s`
+  - `wifi: reconnect n/6 to SSID`
+  - `wifi: reconnect n/6 failed: <err>`
+  - `wifi: link up, ip X unchanged|(was Y) (<why>)`
+  - `wifi: still down after 6 reconnects (N s); hard reset`
+
+Known blocking: each reconnect attempt can block for up to 10 s (pausing the
+dimmer schedule), and the UI is unreachable during an outage anyway.
 
 ## 8. On-device card assembly (was "Cloud API")
 
@@ -334,7 +371,9 @@ need no cache: they are static files already on the drive.
 | `lib/enrich.py` | callsign → airline name + badge key/path, on-device (issue #2) | exists |
 | `lib/filters.py` | on-device hide_heli / hide_mil / hide_ga (issue #2; §10) | exists |
 | `www/index.html` | settings UI | exists |
-| `code.py` | matrix, HTTP, poll loop | stub |
+| `code.py` | matrix, Wi-Fi join / setup-AP fallback, station reconnect watchdog, web UI server (auto-restart), NTP, dimmer schedule; poll_card() is still a placeholder until lib/net.py | exists (poll path placeholder) |
+| `lib/linkwatch.py` | station Wi-Fi drop detection, bounded reconnect (6 tries, ~4 min), then hard reset into setup AP | exists |
+| `lib/httpclient.py` | shared adafruit_requests Session, 4 s timeout, 8 s/32 KB body cap, always-close get_json() for lib/net.py | exists |
 | `lib/card.py` | render 128×64 card | **to build** |
 | `lib/net.py` | HTTPS GET nearby (must pass `extended=1`; §8) | **to build** |
 
@@ -369,7 +408,8 @@ Layout (pixel budget):
 
 - `server.poll()` every iteration
 - ADS-B poll every 15 s when not sleeping
-- Timeouts on HTTP (5–8 s); keep last good card
+- Outbound HTTP only via `lib/httpclient.py` (4 s per-socket-op timeout, 8 s body budget, response always closed; worst-case stall ~16 s); keep last good card
+- Skip NTP/poll and `server.poll()` while `LinkWatch` reports the link down
 - Never block the UI server for more than one poll
 
 ## 10. Filters
@@ -423,11 +463,11 @@ Do these PRs/slices in order. Each slice must run on hardware or have a clear mo
 1. ~~**Harden existing prefs + UI**~~ — done (issues #4, #5)
 2. **Card renderer** — `lib/card.py`, hardcoded style card on 128×64 -- **to build**
 3. ~~**Schedule live**~~ — done (issue #7); ~~**Brightness dimming**~~ — done (issue #8)
-4. **OpenSky HTTPS client** — `lib/net.py`: `poll_card()` hits OpenSky's `/api/states/all` directly with bbox + `extended=1`, optional token; parse JSON -- **to build**
+4. **OpenSky HTTPS client** — `lib/net.py`: `poll_card()` hits OpenSky's `/api/states/all` directly with bbox + `extended=1`, optional token; parse JSON, via `lib/httpclient.py` -- **to build**
 5. ~~**Lookup tables + badges**~~ — done (issue #10: `lib/enrich.py`, `lib/filters.py`, `lib/logos/`)
 6. ~~**Hero selection**~~ — done (issue #9: `lib/hero.py`)
 7. **AP fallback** — if no Wi-Fi (issue #11, in progress)
-8. **Wire it together** — `code.py`'s poll loop calls `lib/net.py` → `lib/filters.py` → `lib/hero.py` → `lib/card.py`, replacing the current stub  
+8. **Wire it together** — `code.py`'s poll loop calls `lib/net.py` → `lib/filters.py` → `lib/hero.py` → `lib/card.py`, replacing the placeholder `poll_card()`  
 
 Do not start a rewrite in ESP-IDF unless CircuitPython HTTPS + HTTP server cannot coexist. If it cannot, port modules 1:1 to Arduino/ESP-IDF and keep this spec.
 
@@ -465,10 +505,15 @@ lib/card.py          # new
 lib/net.py           # new
 lib/wifisettings.py  # new (issue #11: AP-mode settings.toml Wi-Fi writer)
 lib/setupscreen.py   # new (issue #11: panel setup-AP credentials screen)
+lib/linkwatch.py     # new (station Wi-Fi drop detection + bounded reconnect)
+lib/httpclient.py    # new (shared, always-closing adafruit_requests client for lib/net.py)
 tools/gen_badges.py  # new, host-only (generates lib/logos/*.bmp)
 tests/test_enrich_filters.py    # new, host-only
 tests/test_wifisettings.py      # new, host-only (issue #11)
 tests/test_schedule_clock.py    # new, host-only (issue #11)
+tests/test_linkwatch.py         # new, host-only
+tests/test_httpclient.py        # new, host-only
+tests/test_code_linkwatch.py    # new, host-only (runs code.py with fake CircuitPython modules)
 DESIGN.md            # this file
 README.md
 ```
