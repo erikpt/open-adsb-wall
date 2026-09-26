@@ -9,7 +9,7 @@ MatrixPortal S3 + 128x64 HUB75 panel.
 - `prefs.json` (copy from `prefs.example.json`)
 - `settings.toml` (Wi-Fi only -- copy from `settings.toml.example`; do **not** set `CIRCUITPY_WEB_API_PASSWORD`)
 - `www/index.html`
-- `lib/prefs.py`, `lib/sun.py`, `lib/schedule.py`, `lib/bbox.py`, `lib/urldecode.py`
+- `lib/prefs.py`, `lib/sun.py`, `lib/schedule.py`, `lib/bbox.py`, `lib/urldecode.py`, `lib/tz.py`, `lib/dim.py`
 
 Libraries from the CircuitPython bundle:
 

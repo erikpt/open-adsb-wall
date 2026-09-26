@@ -126,6 +126,8 @@ Every ~1 s (or on prefs save):
 2. Else if night → `min(brightness_night, brightness_max)`
 3. Else → `min(brightness_day, brightness_max)`
 
+Dimming is done by scaling draw colours (`lib/dim.py` Dimmer). `display.brightness` is on/off on rgbmatrix, so it stays 1.0 while awake and 0.0 only for the black sleep state (blank group).
+
 NTP at boot (UTC into RTC). The RTC and `sun.py` stay UTC. `schedule.py` computes local time as UTC + `tz_offset_min` (+60 min under the fixed US DST rule when `us_dst`) via `lib/tz.py`. No tz database: only the fixed US rule is supported.
 
 ## 7. Local web UI
@@ -218,6 +220,7 @@ MVP: Cloudflare Worker + KV/R2 is enough for two devices. Linode if FlightAware 
 | `lib/sun.py` | sunrise/sunset | exists |
 | `lib/schedule.py` | sleep/night/brightness | exists |
 | `lib/bbox.py` | OpenSky box | exists |
+| `lib/dim.py` | colour-scale dimming + sleep blank | exists |
 | `www/index.html` | settings UI | exists |
 | `code.py` | matrix, HTTP, poll loop | stub |
 | `lib/card.py` | render 128×64 card | **to build** |
@@ -244,7 +247,7 @@ Layout (pixel budget):
 - No data: `NO TRAFFIC` + local time
 - Error: `NO LINK` (do not crash the HTTP server)
 
-`bit_depth=3` or `4` is enough. Do not use depth 6+ on this panel for MVP.
+`bit_depth=4` (set via `BIT_DEPTH` in `code.py`); 3 gives only 7 lit levels per channel. Do not use 6+ for MVP.
 
 ### Poll loop
 
@@ -311,6 +314,7 @@ lib/prefs.py
 lib/sun.py
 lib/schedule.py
 lib/bbox.py
+lib/dim.py
 lib/card.py          # new
 lib/net.py           # new
 DESIGN.md            # this file
