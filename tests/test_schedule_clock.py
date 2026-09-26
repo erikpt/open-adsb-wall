@@ -5,7 +5,7 @@ Run: python3 tests/test_schedule_clock.py
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware", "lib"))
 
 import schedule  # noqa: E402
 from schedule import (MIN_TRUSTED_TS, brightness, clock_trusted, night,  # noqa: E402

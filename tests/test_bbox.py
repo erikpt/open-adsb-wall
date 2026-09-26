@@ -6,7 +6,7 @@ import math
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware", "lib"))
 
 from bbox import box  # noqa: E402
 

@@ -5,7 +5,7 @@ Run: python3 tests/test_dim.py
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware", "lib"))
 
 from dim import Dimmer, min_visible, scale_color  # noqa: E402
 

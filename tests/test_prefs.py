@@ -8,7 +8,7 @@ import os
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware", "lib"))
 
 import prefs  # noqa: E402
 from prefs import DEFAULTS, apply_form, load, save  # noqa: E402

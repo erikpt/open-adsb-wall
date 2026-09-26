@@ -8,7 +8,7 @@ import calendar
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware", "lib"))
 
 from schedule import brightness, night, set_clock_synced, sleeping  # noqa: E402
 from sun import is_after_sunset, sunrise_sunset  # noqa: E402

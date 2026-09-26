@@ -4,37 +4,37 @@ MatrixPortal S3 + 128x64 HUB75 panel.
 
 ## On the CIRCUITPY drive
 
-- `boot.py`
-- `code.py`
-- `prefs.json` (copy from `prefs.example.json`)
-- `settings.toml` (Wi-Fi only -- copy from `settings.toml.example`; do **not** set `CIRCUITPY_WEB_API_PASSWORD`)
-- `www/index.html`
-- `lib/prefs.py`, `lib/sun.py`, `lib/schedule.py`, `lib/bbox.py`, `lib/urldecode.py`, `lib/tz.py`, `lib/dim.py`, `lib/hero.py`
-- `lib/enrich.py`, `lib/filters.py` (on-device airline lookup + heli/mil/GA filters, issue #2: no cloud)
-- `lib/logos/` (50 generated badge BMPs, ~17.7 KB total -- see `tools/gen_badges.py`)
-- `lib/wifisettings.py` (settings.toml Wi-Fi writer, AP-mode provisioning, issue #11)
-- `lib/setupscreen.py` (panel setup-AP credentials screen, issue #11)
-- `lib/linkwatch.py` (station Wi-Fi drop detection + bounded reconnect watchdog)
-- `lib/httpclient.py` (shared, always-closing adafruit_requests client pattern for the future `lib/net.py`)
+- `firmware/boot.py`
+- `firmware/code.py`
+- `prefs.json` (copy from `firmware/prefs.example.json`)
+- `settings.toml` (Wi-Fi only -- copy from `firmware/settings.toml.example`; do **not** set `CIRCUITPY_WEB_API_PASSWORD`)
+- `firmware/www/index.html`
+- `firmware/lib/prefs.py`, `firmware/lib/sun.py`, `firmware/lib/schedule.py`, `firmware/lib/bbox.py`, `firmware/lib/urldecode.py`, `firmware/lib/tz.py`, `firmware/lib/dim.py`, `firmware/lib/hero.py`
+- `firmware/lib/enrich.py`, `firmware/lib/filters.py` (on-device airline lookup + heli/mil/GA filters, issue #2: no cloud)
+- `firmware/lib/logos/` (50 generated badge BMPs, ~17.7 KB total -- see `tools/gen_badges.py`)
+- `firmware/lib/wifisettings.py` (settings.toml Wi-Fi writer, AP-mode provisioning, issue #11)
+- `firmware/lib/setupscreen.py` (panel setup-AP credentials screen, issue #11)
+- `firmware/lib/linkwatch.py` (station Wi-Fi drop detection + bounded reconnect watchdog)
+- `firmware/lib/httpclient.py` (shared, always-closing adafruit_requests client pattern for the future `firmware/lib/net.py`)
 
 Libraries from the CircuitPython bundle:
 
 - `adafruit_httpserver`
 - `adafruit_ntp`
-- `adafruit_imageload` (decodes `lib/logos/*.bmp` badges)
-- `adafruit_display_text` (setup-AP credentials screen, `lib/setupscreen.py`)
-- `adafruit_requests`, `adafruit_connection_manager` (needed once `lib/net.py` starts making HTTPS requests via `lib/httpclient.py`)
+- `adafruit_imageload` (decodes `firmware/lib/logos/*.bmp` badges)
+- `adafruit_display_text` (setup-AP credentials screen, `firmware/lib/setupscreen.py`)
+- `adafruit_requests`, `adafruit_connection_manager` (needed once `firmware/lib/net.py` starts making HTTPS requests via `firmware/lib/httpclient.py`)
 
 `tests/` (host-side checks, e.g. `tests/test_hero.py`) is plain Python for a
 computer's `python3` and is **not** copied to the CIRCUITPY drive.
 
 ## Updating files (read-only USB drive)
 
-`boot.py` remounts CIRCUITPY writable for the firmware so the web UI can save
-`/prefs.json` (and `/prefs.bak`). Side effect: in normal operation the USB drive
-is **read-only** to your computer.
+`firmware/boot.py` remounts CIRCUITPY writable for the firmware so the web UI
+can save `/prefs.json` (and `/prefs.bak`). Side effect: in normal operation the
+USB drive is **read-only** to your computer.
 
-To update `code.py`, `lib/`, or `www/`:
+To update `firmware/code.py`, `firmware/lib/`, or `firmware/www/`:
 
 1. Plug into USB, **hold the UP button**, tap RESET (or power-cycle), and keep
    holding UP about 2 s until the drive mounts.
@@ -46,12 +46,12 @@ Do **not** hold BOOT for this: BOOT at power-up enters the ESP32-S3 ROM
 bootloader, not CircuitPython.
 
 Fallbacks: enter safe mode (press RESET, then press RESET again during the ~1 s
-yellow status-LED blink); safe mode skips `boot.py` and leaves the drive
+yellow status-LED blink); safe mode skips `firmware/boot.py` and leaves the drive
 USB-writable. Or from the serial REPL: `import os; os.rename("/boot.py", "/boot.off")`
 then hard reset.
 
-`boot.py` only runs on hard reset/power-up; a soft reload (Ctrl-D, file save)
-does not re-run it.
+`firmware/boot.py` only runs on hard reset/power-up; a soft reload (Ctrl-D,
+file save) does not re-run it.
 
 ## Behavior
 
@@ -64,8 +64,8 @@ does not re-run it.
 - Night mode: off / fixed hours / after local sunset
 - Day / night / max brightness sliders
 - Filters stored: `hide_heli`, `hide_ga`, `hide_mil`
-- 10 miles each way → OpenSky bbox (printed to serial until `lib/net.py` is wired)
-- No cloud API -- OpenSky is called directly from the device; hero selection, filters, and airline badges all run on-device (`lib/hero.py`, `lib/filters.py`, `lib/enrich.py`, `lib/logos/`)
+- 10 miles each way → OpenSky bbox (printed to serial until `firmware/lib/net.py` is wired)
+- No cloud API -- OpenSky is called directly from the device; hero selection, filters, and airline badges all run on-device (`firmware/lib/hero.py`, `firmware/lib/filters.py`, `firmware/lib/enrich.py`, `firmware/lib/logos/`)
 - If Wi-Fi drops, TailWatch retries the join for ~4 min (serial shows `wifi:` lines), moves the web UI to the new IP, and otherwise reboots into the setup AP.
 
 ## First-time / new Wi-Fi setup
@@ -92,12 +92,12 @@ mode indefinitely; with an SSID configured but unreachable, it retries the
 join automatically after about 10 minutes of no setup-page activity.
 
 Wi-Fi saves need a normal boot (not booted with UP held) since that mode
-leaves the filesystem read-only to `code.py`; a save attempted then returns
-503 and the device does not reboot.
+leaves the filesystem read-only to `firmware/code.py`; a save attempted then
+returns 503 and the device does not reboot.
 
 ## Next
 
-1. `lib/net.py`: implement `poll_card()` as an HTTPS GET to OpenSky's `/api/states/all` (bbox + `extended=1`)
-2. Draw the returned card with `displayio` / `terminalio` (`lib/card.py`)
-3. Wire `code.py`'s poll loop: `net.poll_card()` → `filters.apply()` → `hero.select()` → `card.draw()`
+1. `firmware/lib/net.py`: implement `poll_card()` as an HTTPS GET to OpenSky's `/api/states/all` (bbox + `extended=1`)
+2. Draw the returned card with `displayio` / `terminalio` (`firmware/lib/card.py`)
+3. Wire `firmware/code.py`'s poll loop: `net.poll_card()` → `filters.apply()` → `hero.select()` → `card.draw()`
 4. ~~AP-mode first-boot if `CIRCUITPY_WIFI_SSID` is empty~~ -- done (issue #11)

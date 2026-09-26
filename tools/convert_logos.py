@@ -89,7 +89,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-sys.path.insert(0, os.path.join(ROOT, "lib"))
+FIRMWARE = os.path.join(ROOT, "firmware")
+sys.path.insert(0, os.path.join(FIRMWARE, "lib"))
 sys.path.insert(0, HERE)
 
 from enrich import AIRLINES  # noqa: E402
@@ -102,7 +103,7 @@ except ImportError:
 
 SOURCES_DIR = os.path.join(HERE, "logo_sources")
 SOURCES_MANIFEST = os.path.join(SOURCES_DIR, "sources.json")
-LOGOS_DIR = os.path.join(ROOT, "lib", "logos")
+LOGOS_DIR = os.path.join(FIRMWARE, "lib", "logos")
 
 MAX_DIM = 48        # DESIGN.md sec. 9 badge slot budget
 STEPS = 8           # palette entries: black .. accent, must stay <= 16 (4-bit)

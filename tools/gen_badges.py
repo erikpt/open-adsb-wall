@@ -26,7 +26,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-sys.path.insert(0, os.path.join(ROOT, "lib"))
+FIRMWARE = os.path.join(ROOT, "firmware")
+sys.path.insert(0, os.path.join(FIRMWARE, "lib"))
 
 from enrich import AIRLINES, UNKNOWN_KEY  # noqa: E402
 
@@ -219,4 +220,4 @@ def main(out_dir):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "lib", "logos"))
+    main(sys.argv[1] if len(sys.argv) > 1 else os.path.join(FIRMWARE, "lib", "logos"))

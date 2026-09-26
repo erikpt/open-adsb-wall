@@ -11,7 +11,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-sys.path.insert(0, os.path.join(ROOT, "lib"))
+sys.path.insert(0, os.path.join(ROOT, "firmware", "lib"))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import convert_logos  # noqa: E402
@@ -22,7 +22,7 @@ from enrich import AIRLINES, UNKNOWN_KEY, badge_path, lookup, prefix  # noqa: E4
 from filters import MIL_RANGES, apply, hidden, is_ga, is_heli, is_mil  # noqa: E402
 from hero import candidates  # noqa: E402
 
-LOGOS = os.path.join(ROOT, "lib", "logos")
+LOGOS = os.path.join(ROOT, "firmware", "lib", "logos")
 SOURCES = os.path.join(ROOT, "tools", "logo_sources")
 ALL_ON = {"hide_heli": True, "hide_mil": True, "hide_ga": True}
 

@@ -12,8 +12,8 @@ import types
 from contextlib import redirect_stdout
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-sys.path.insert(0, os.path.join(ROOT, "lib"))
-CODE = os.path.join(ROOT, "code.py")
+sys.path.insert(0, os.path.join(ROOT, "firmware", "lib"))
+CODE = os.path.join(ROOT, "firmware", "code.py")
 
 
 class Reset(Exception):
