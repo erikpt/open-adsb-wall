@@ -244,6 +244,101 @@ rod plate at 125.5 mm. For robustness I also
 rendered `portal_rot` = 90, 180 and 270 with other header positions, and
 `pod_fix = "pins"`. All of them came out manifold and in-bed.
 
+## Blender file (.blend) and web 3D viewer (.glb)
+
+`tailwatch_enclosure.blend` is a native Blender scene showing all 6 printed
+parts in their **assembled** position (plus the panel and MatrixPortal
+reference/"dummy" geometry, for context), each as its own named, colored
+object: `frame_left`, `frame_right`, `strap_1`, `strap_2`, `portal_pod`,
+`button_rods`, `bowtie_key_1`, `bowtie_key_2`, `panel_dummy`, `portal_dummy`.
+Colors match the `assembly()` preview's `color()` calls (frame halves grey,
+pod blue, rods yellow, straps green, bowtie keys tomato red).
+
+It is **not** re-derived from scratch in `bpy` -- that would risk a subtle
+mismatch with the OpenSCAD source of truth. Instead:
+
+1. `blender_import/*_positioned.scad` -- one small wrapper per part (plus
+   `panel_dummy`/`portal_dummy`) that applies the *exact* transform
+   `assembly()` uses in `tailwatch_lib.scad` (`on_board()`, `frame_half(0/1)`,
+   the `strap_xs` loop, the bowtie `seam_x` placement, ...) around just that
+   part's raw module, at `explode = 0`.
+2. `tools/export_blender_stls.sh` runs OpenSCAD on each wrapper, producing
+   `blender_import/*.stl` in true assembly position (distinct from the
+   print-orientation STLs in `stl/`).
+3. `tools/blender_build.py` (run headless: `blender --background --python
+   tools/blender_build.py`) imports each STL as its own object, assigns its
+   material/color, lights and renders 3 views to
+   `preview/blender_front.png`, `preview/blender_iso.png`,
+   `preview/blender_back.png` (1600x1200, Eevee), saves
+   `tailwatch_enclosure.blend`, and exports a combined
+   `web/tailwatch_enclosure.glb` (glTF binary, ~0.24 MB) for embedding with
+   Google's `<model-viewer>` web component.
+
+To regenerate after an OpenSCAD change:
+
+```sh
+artifacts/tailwatch-s3/enclosure/tools/export_blender_stls.sh
+blender --background --python artifacts/tailwatch-s3/enclosure/tools/blender_build.py
+```
+
+(Blender's bundled Python needs `numpy` for its glTF exporter addon; if you
+see `ModuleNotFoundError: No module named 'numpy'` the first time, find
+Blender's Python with `blender --background --python-expr "import sys;
+print(sys.executable)"` and `pip install --break-system-packages numpy`
+into it.)
+
+## STEP file (parametric CadQuery rebuild)
+
+`step/` contains a **from-scratch CadQuery (OCCT/BREP) reconstruction** of
+the 6 printable parts, exported as real STEP solids (`step/*.step`) plus
+matching STLs (`step/*_cq.stl`) for verification. This is the one
+deliverable that couldn't be produced by transforming the existing OpenSCAD
+export: STL is a mesh, and STEP needs an actual boundary-representation
+solid, so the geometry is rebuilt in CadQuery from the same numbers in
+`params.scad`.
+
+- `step/tailwatch_params.py` -- a manual, literal transcription of
+  `params.scad`'s values and its `DERIVED VALUES` section into Python
+  (kept in the same order, so a diff against `params.scad` is easy).
+- `step/cadquery_build.py` -- builds all 6 parts and exports them, in the
+  same **print orientation** as `stl/*.stl` (via the same
+  `frame_print()`/`strap_print()`/`pod_print()`/`rods_print()`/
+  `keys_print()` transforms), so bounding boxes can be compared directly.
+  Regenerate with `python3 step/cadquery_build.py` (needs `pip install
+  cadquery`).
+
+**Simplifications vs. the OpenSCAD design** (documented in detail in that
+file's docstring; all are subtractive/cosmetic and do not change any
+part's overall envelope): no corner fillets/front chamfer on the frame, no
+diamond vents, no power/USB/button-rod side notches, no engraved text, the
+MatrixPortal pod is a solid roof+skirt block (no hollow skirt or roof
+vents), and the strap omits the 45-degree wedge-envelope corner relief.
+**Kept faithfully**: the frame's wedge retention ledges, rear flange, both
+keyhole slots and the seam boss + bowtie-key pocket; the bowtie keys'
+hexagonal profile; the strap's slab + rib + M3 slot; the pod's 4 M2.5
+mounting posts (at their exact hole coordinates) with pilot holes and the
+push-rod guide block with its 3 rod tunnels; the rods' exact profile.
+
+**Dimensional cross-check** (`tools/check_stl.py stl/*.stl step/*_cq.stl`,
+bounding box in mm, OpenSCAD vs. CadQuery):
+
+| Part | OpenSCAD (stl/) | CadQuery (step/) | Diff |
+|---|---|---|---|
+| bowtie_keys | 44.0 x 8.0 x 20.8 | 44.0 x 8.0 x 20.8 | 0 |
+| button_rods | 125.5 x 40.7 x 4.0 | 125.5 x 40.7 x 4.0 | 0 |
+| frame_left | 131.0 x 134.0 x 35.5 | 131.0 x 134.0 x 35.5 | 0 |
+| frame_right | 131.0 x 134.0 x 35.5 | 131.0 x 134.0 x 35.5 | 0 |
+| portal_pod | 81.5 x 51.4 x 14.2 | 81.5 x 51.5 x 14.2 | 0.1 mm (Y) |
+| strap | 16.0 x 123.0 x 6.9 | 16.0 x 123.0 x 6.9 | 0 |
+
+All 6 parts pass, well within a "few mm" tolerance -- 5 of 6 are an exact
+bounding-box match and the pod is off by 0.1 mm. Volumes differ more (e.g.
+the pod: 14.2 cm3 hollow original vs. 38.0 cm3 solid-block CadQuery
+simplification) exactly where the simplifications above remove hollow/vented
+material, as expected. Every exported STEP file was re-imported with
+CadQuery and confirmed to be a single valid solid (2 for the bowtie-key
+pair, 3 for the rods) with a matching bounding box.
+
 ## Files
 
 | File | Purpose |
@@ -254,6 +349,11 @@ rendered `portal_rot` = 90, 180 and 270 with other header positions, and
 | `assembly.scad` | Preview. Use `-D explode=40` for exploded and `-D upright=true` for the wall-hung orientation. |
 | `tools/build.sh`, `tools/check_stl.py` | Build and verification scripts. |
 | `stl/`, `preview/`, `logs/` | Generated output. |
+| `blender_import/` | Positioned-STL wrappers/exports used to build the Blender file. |
+| `tailwatch_enclosure.blend` | Native Blender scene, assembled position, per-part materials. |
+| `web/tailwatch_enclosure.glb` | Combined glTF binary for `<model-viewer>` embedding. |
+| `tools/export_blender_stls.sh`, `tools/blender_build.py` | Regenerate the positioned STLs / the .blend + previews + .glb. |
+| `step/` | CadQuery rebuild: `tailwatch_params.py`, `cadquery_build.py`, `*.step`, `*_cq.stl`. |
 
 ## Sources
 
