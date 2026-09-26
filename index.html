@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TailWatch — a wall display for the planes overhead</title>
+<meta name="description" content="TailWatch is an open-source, on-device wall display that shows one live nearby aircraft at a time. No cloud, no subscription, no app.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="#top">
+      <span class="brand-dot" aria-hidden="true"></span>
+      TailWatch
+    </a>
+    <nav class="nav">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#hardware">Hardware</a>
+      <a href="https://github.com/erikpt/open-adsb-wall" class="nav-cta">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <section class="hero" id="top">
+    <div class="wrap hero-inner">
+      <div class="hero-copy">
+        <p class="eyebrow">Open source &middot; on-device &middot; no subscription</p>
+        <h1>One plane. One wall.<br>Always watching the sky.</h1>
+        <p class="lede">
+          TailWatch is a small LED wall panel that shows exactly one aircraft near
+          your home at a time &mdash; flight number, airline, route, altitude, speed &mdash;
+          quietly updating as planes pass overhead. No app, no account, no cloud
+          service in the loop.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/erikpt/open-adsb-wall">View the project on GitHub</a>
+          <a class="btn btn-ghost" href="#how">See how it works</a>
+        </div>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <div class="panel">
+          <div class="panel-frame">
+            <div class="panel-row row-flight">TWA 512 &middot; SEA&ndash;PDX</div>
+            <div class="panel-row row-alt">FL 210 &middot; 340 kt</div>
+            <div class="panel-row row-city">arriving &middot; Portland Intl</div>
+          </div>
+          <div class="panel-glow"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="how">
+    <div class="wrap">
+      <h2>How it works</h2>
+      <ol class="steps">
+        <li>
+          <span class="step-n">1</span>
+          <div>
+            <h3>Tell it where you live</h3>
+            <p>Set your latitude/longitude and a search radius once, from a small settings page it hosts itself.</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-n">2</span>
+          <div>
+            <h3>It watches the sky nearby</h3>
+            <p>The device polls public aircraft-tracking data directly &mdash; no middleman server, nothing routed through us.</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-n">3</span>
+          <div>
+            <h3>One card at a time</h3>
+            <p>It picks the closest aircraft and holds it steady on screen, switching only when a new one is clearly closer &mdash; not flickering between planes.</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section alt" id="features">
+    <div class="wrap">
+      <h2>Features</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Fully on-device</h3>
+          <p>Runs entirely on the hardware itself. No cloud API, no account, nothing to subscribe to or that can be shut down remotely.</p>
+        </div>
+        <div class="card">
+          <h3>Day &amp; night aware</h3>
+          <p>Brightness follows a day/night schedule &mdash; fixed hours or real local sunset &mdash; and can go fully dark on a sleep schedule.</p>
+        </div>
+        <div class="card">
+          <h3>Filter what you see</h3>
+          <p>Hide helicopters, small general-aviation traffic, or military aircraft, independently.</p>
+        </div>
+        <div class="card">
+          <h3>Airline badges</h3>
+          <p>A small bundled set of carrier badges and colors, generated locally &mdash; no scraped logos, no network fetch.</p>
+        </div>
+        <div class="card">
+          <h3>Recovers on its own</h3>
+          <p>If Wi-Fi drops, it reconnects automatically. If it moves to a new network, it reopens its own setup hotspot &mdash; no factory reset.</p>
+        </div>
+        <div class="card">
+          <h3>A little easter egg</h3>
+          <p>There's a hidden animation if you know where to look. We're not telling.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="hardware">
+    <div class="wrap">
+      <h2>Hardware</h2>
+      <p class="section-lede">Four off-the-shelf parts &mdash; nothing custom to fabricate, no soldering required.</p>
+      <div class="parts">
+
+        <article class="part">
+          <h3>Controller</h3>
+          <p class="part-spec">Adafruit MatrixPortal S3 &mdash; Wi-Fi, CircuitPython, drives the panel directly</p>
+          <div class="part-links">
+            <a href="https://www.adafruit.com/product/5778">Adafruit (official)</a>
+            <span class="part-note">buy direct &mdash; no reliable Amazon.com listing found for the genuine board; avoid AliExpress clones for this one</span>
+          </div>
+        </article>
+
+        <article class="part">
+          <h3>Display panel</h3>
+          <p class="part-spec">128&times;64, true P2 pitch (2.0mm), 256&times;128mm, HUB75, 1/32 scan &mdash; not the more common P2.5 (320&times;160mm), which is a different physical size</p>
+          <div class="part-links">
+            <a href="https://www.amazon.com/Indoor-128x64-Module-256mm128mm-256128mm/dp/B0869P1DCH">Amazon</a>
+            <a href="https://www.aliexpress.us/item/3256801771993603.html">AliExpress (alternative)</a>
+          </div>
+        </article>
+
+        <article class="part">
+          <h3>Power supply</h3>
+          <p class="part-spec">5V 4A (20W), 5.5&times;2.1mm barrel plug, UL listed &mdash; panel draws ~3A at full white, budget headroom for margin</p>
+          <div class="part-links">
+            <a href="https://www.amazon.com/Power-Supply-Adapter-5-5mm-2-1mm/dp/B09JW28WQC">Amazon</a>
+          </div>
+        </article>
+
+        <article class="part">
+          <h3>Barrel-to-panel adapter</h3>
+          <p class="part-spec">Female 5.5&times;2.1mm barrel jack to 2-pin screw terminal &mdash; mates the power brick to the panel's bare 5V/GND leads</p>
+          <div class="part-links">
+            <a href="https://www.amazon.com/Cctv4Less-Connectors-Terminal-Adapter-Security/dp/B077QD4G3Q">Amazon</a>
+          </div>
+        </article>
+
+      </div>
+      <p class="part-disclaimer">Links are for reference, not endorsements or affiliate links (we don't have any) &mdash; verify specs before buying, prices and listings change.</p>
+    </div>
+  </section>
+
+  <section class="section cta-section">
+    <div class="wrap cta-inner">
+      <h2>It's open source</h2>
+      <p>Firmware, design notes, and setup docs are all on GitHub. Build your own.</p>
+      <a class="btn btn-primary" href="https://github.com/erikpt/open-adsb-wall">github.com/erikpt/open-adsb-wall</a>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <span>TailWatch &mdash; an open-source hobby project.</span>
+    <a href="https://github.com/erikpt/open-adsb-wall">GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>
