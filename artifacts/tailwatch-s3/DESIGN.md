@@ -221,6 +221,10 @@ MVP: Cloudflare Worker + KV/R2 is enough for two devices. Linode if FlightAware 
 | `lib/schedule.py` | sleep/night/brightness | exists |
 | `lib/bbox.py` | OpenSky box | exists |
 | `lib/dim.py` | colour-scale dimming + sleep blank | exists |
+| `lib/tz.py` | UTC offset + fixed US DST rule | exists |
+| `lib/urldecode.py` | percent-decode form bodies | exists |
+| `lib/buttons.py` | hold-to-trigger button helper | exists |
+| `lib/nyan.py` | easter egg animation | exists |
 | `www/index.html` | settings UI | exists |
 | `code.py` | matrix, HTTP, poll loop | stub |
 | `lib/card.py` | render 128×64 card | **to build** |
