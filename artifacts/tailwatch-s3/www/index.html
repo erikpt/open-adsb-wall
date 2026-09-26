@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>TailWatch</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#111;color:#eee;margin:1.2rem;max-width:28rem}
+label{display:block;margin:.7rem 0 .2rem}
+input,select{width:100%;padding:.45rem;border:0;border-radius:4px}
+.row{display:flex;gap:.6rem}
+.row>div{flex:1}
+button{margin-top:1rem;padding:.6rem 1rem;width:100%}
+.check{display:flex;align-items:center;gap:.5rem;margin:.4rem 0}
+.check input{width:auto}
+h1{font-size:1.2rem}
+.muted{color:#aaa;font-size:.85rem}
+</style>
+</head>
+<body>
+<h1>TailWatch</h1>
+<p class="muted" id="status">loading…</p>
+<form id="f" method="POST" action="/api/prefs">
+<label>Latitude</label><input name="lat" id="lat" step="any"/>
+<label>Longitude</label><input name="lon" id="lon" step="any"/>
+<label>Box (miles each way)</label><input name="nm" id="nm" type="number" min="1" max="50" step="0.5"/>
+
+<h2>Filters</h2>
+<div class="check"><input type="checkbox" name="hide_heli" id="hide_heli" value="1"/><span>Hide helicopters</span></div>
+<div class="check"><input type="checkbox" name="hide_ga" id="hide_ga" value="1"/><span>Hide general aviation</span></div>
+<div class="check"><input type="checkbox" name="hide_mil" id="hide_mil" value="1"/><span>Hide military</span></div>
+
+<h2>Brightness</h2>
+<label>Day <span id="bdv"></span></label>
+<input type="range" name="brightness_day" id="brightness_day" min="0" max="1" step="0.01"/>
+<label>Night <span id="bnv"></span></label>
+<input type="range" name="brightness_night" id="brightness_night" min="0" max="1" step="0.01"/>
+<label>Max cap <span id="bmv"></span></label>
+<input type="range" name="brightness_max" id="brightness_max" min="0" max="1" step="0.01"/>
+
+<h2>Night mode</h2>
+<select name="night_mode" id="night_mode">
+  <option value="off">Off</option>
+  <option value="fixed">Fixed hours</option>
+  <option value="sunset">After local sunset</option>
+</select>
+<div class="row">
+  <div><label>Night start</label><input name="night_start" id="night_start" placeholder="21:00"/></div>
+  <div><label>Night end</label><input name="night_end" id="night_end" placeholder="06:30"/></div>
+</div>
+
+<h2>Sleep (display off)</h2>
+<div class="check"><input type="checkbox" name="sleep_enabled" id="sleep_enabled" value="1"/><span>Enable sleep</span></div>
+<div class="row">
+  <div><label>Sleep start</label><input name="sleep_start" id="sleep_start"/></div>
+  <div><label>Sleep end</label><input name="sleep_end" id="sleep_end"/></div>
+</div>
+
+<label>Timezone</label><input name="timezone" id="timezone"/>
+<label>API URL</label><input name="api" id="api"/>
+<label>Device token</label><input name="token" id="token" autocomplete="off"/>
+<button type="submit">Save</button>
+</form>
+<script>
+function set(id,v){const el=document.getElementById(id);if(!el)return;
+  if(el.type==="checkbox")el.checked=!!v;else el.value=v??"";}
+function sync(){
+  bdv.textContent=(+brightness_day.value).toFixed(2);
+  bnv.textContent=(+brightness_night.value).toFixed(2);
+  bmv.textContent=(+brightness_max.value).toFixed(2);
+}
+["brightness_day","brightness_night","brightness_max"].forEach(id=>{
+  document.getElementById(id).addEventListener("input",sync);
+});
+fetch("/api/prefs").then(r=>r.json()).then(p=>{
+  Object.keys(p).forEach(k=>set(k,p[k]));
+  sync();
+  status.textContent="prefs loaded";
+}).catch(()=>{status.textContent="could not load prefs";});
+</script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "lat": 30.2094,
+  "lon": -95.7508,
+  "nm": 10,
+  "hide_heli": true,
+  "hide_ga": false,
+  "hide_mil": true,
+  "brightness_day": 0.7,
+  "brightness_night": 0.18,
+  "brightness_max": 1.0,
+  "night_mode": "sunset",
+  "night_start": "21:00",
+  "night_end": "06:30",
+  "sleep_enabled": true,
+  "sleep_start": "23:00",
+  "sleep_end": "06:30",
+  "timezone": "America/Chicago",
+  "api": "https://api.example.com",
+  "token": ""
+}
