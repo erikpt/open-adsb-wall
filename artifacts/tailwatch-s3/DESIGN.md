@@ -197,12 +197,18 @@ sketched here):
 1. Positions in bbox, airborne (`on_ground` false); `lib/hero.py:candidates()`
    turns the raw OpenSky state vectors into candidate dicts, skipping ground
    traffic, rows without a position, and malformed rows.
-2. Apply hide_* filters (future `lib/filters.py`; a filtered-out hero is
-   treated as rule (b), "gone")
+2. Apply hide_* filters (`lib/filters.py:apply()`, on-device, issue #2; a
+   filtered-out hero is treated as rule (b), "gone")
 3. Prefer closest to pin; tie-break lower altitude then higher speed
    (`lib/hero.py:_rank`)
-4. Enrich hex → type/reg; callsign prefix → airline + logo id; route cache → OD pair + city + arriving/departing if possible
+4. Enrich hex → type/reg; callsign prefix → airline + badge id (`lib/enrich.py:lookup()`,
+   on-device, issue #2); route cache → OD pair + city + arriving/departing if possible
 5. If enrichment missing, still return callsign + alt + spd
+
+**`extended=1` is required.** `lib/net.py`'s OpenSky request must add
+`&extended=1`, or every state vector's category comes back `None`: helicopters
+are never detected (`lib/filters.py:is_heli()` only matches category 8) and
+`is_ga()` falls back to the callsign-shape heuristic for everything.
 
 **Hysteresis / hold** — the shown aircraft is tracked by ICAO hex and only
 changes when one of these fires (`lib/hero.py:select()`, called each poll by
@@ -237,13 +243,21 @@ tie-break as above). Distances are statute miles, matching `lib/bbox.py`
 (69 mi/degree) and the prefs `nm` field, which despite its name is also miles
 each way.
 
-### `GET /v1/logo/{id}`
+### Badges (was `GET /v1/logo/{id}`)
 
-Raw 16×16 RGB565 little-endian (512 bytes) or a documented alternative the S3 already decodes. No PNG on the device.
+Superseded (issue #2): airline badges are no longer fetched from the cloud.
+`tools/gen_badges.py` (host-only, stdlib-only, Pillow-free generator) bakes 50
+24×24, 4-bit indexed BMP tiles into `lib/logos/<key>.bmp` at build time, one per
+`lib/enrich.py:AIRLINES` entry plus a generic fallback (`_unk.bmp`). All 50
+badges together are 17,700 bytes (354 bytes each); on the board's 512-byte
+FAT clusters that's ~25 KB, comfortably inside the 8 MB flash. Only one badge
+is loaded into RAM at a time (~288 bytes). `lib/enrich.py:badge_path()` maps a
+lookup to its file path; `lib/card.py` loads it with `adafruit_imageload.load()`
+or `displayio.OnDiskBitmap()`. No PNG, no network round-trip, no server.
 
 ### Caching
 
-Snap lat/lon to a grid (~10 mi) so two nearby devices share one OpenSky fetch. TTL 10–15 s for positions, hours for hex→type, forever for logos.
+Snap lat/lon to a grid (~10 mi) so two nearby devices share one OpenSky fetch. TTL 10–15 s for positions, hours for hex→type. Badges need no cache: they are static files already on the drive.
 
 Do not call `states/all` without a bbox. Honor OpenSky rate limits and non-commercial terms. Store OpenSky credentials only on the server.
 
@@ -265,11 +279,12 @@ MVP: Cloudflare Worker + KV/R2 is enough for two devices. Linode if FlightAware 
 | `lib/buttons.py` | hold-to-trigger button helper | exists |
 | `lib/nyan.py` | easter egg animation | exists |
 | `lib/hero.py` | hero-aircraft selection + hysteresis (on-device, issue #2) | exists |
+| `lib/enrich.py` | callsign → airline name + badge key/path, on-device (issue #2) | exists |
+| `lib/filters.py` | on-device hide_heli / hide_mil / hide_ga (issue #2; §10) | exists |
 | `www/index.html` | settings UI | exists |
 | `code.py` | matrix, HTTP, poll loop | stub |
 | `lib/card.py` | render 128×64 card | **to build** |
-| `lib/net.py` | HTTPS GET nearby + logo | **to build** |
-| `lib/filters.py` | local filter if API returns a list | optional |
+| `lib/net.py` | HTTPS GET nearby (must pass `extended=1`; §8) | **to build** |
 
 ### Display card (128×64)
 
@@ -277,7 +292,7 @@ Layout (pixel budget):
 
 ```
 +------------------+----------------------------+
-| 16×16 logo       | Airline                     |
+| 24×24 badge      | Airline                     |
 |                  | FLIGHT  ROUTE               |
 +------------------+ TYPE                        |
 | city / phase                               |
@@ -285,8 +300,13 @@ Layout (pixel budget):
 +--------------------------------------------+
 ```
 
+- Badge: local `lib/logos/<key>.bmp` (24×24, 4-bit indexed), loaded via
+  `adafruit_imageload.load()` or `displayio.OnDiskBitmap()` (§8, issue #2).
+  Register one badge palette in `lib/dim.py` and overwrite its colours on
+  each hero swap (`Dimmer.add_palette` only ever adds, so swapping badges by
+  adding a fresh palette every poll would leak memory)
 - Font: `terminalio.FONT` or a bundled 5×7 / 6×12 bitmap font
-- Colors: white text, dim gray labels, logo as-is
+- Colors: white text, dim gray labels, badge as-is
 - Sleep: empty group / brightness 0
 - No data: `NO TRAFFIC` + local time
 - Error: `NO LINK` (do not crash the HTTP server)
@@ -302,13 +322,40 @@ Layout (pixel budget):
 
 ## 10. Filters
 
-Heuristic MVP (document as imperfect):
+On-device (`lib/filters.py`, issue #2 — no server blocklist). Heuristic MVP,
+documented as imperfect:
 
-- helicopter: OpenSky category rotorcraft / type prefix `H` / known heli ICAO types
-- military: hex or callsign on a small blocklist file on the server
-- GA: not in airline-prefix table and not airliner type prefixes (`B73`, `B78`, `A32`, `E17`, …)
+- **Helicopter (`is_heli`):** true only when OpenSky's ADS-B emitter
+  `category == 8` (Rotorcraft). This field is state-vector index 17 and is
+  only populated when the `/states/all` request includes `&extended=1`
+  (`lib/net.py`, **to build**) — without it every category is `None` and no
+  helicopter is ever detected. Category values: 0 no info, 1 no category info,
+  2 Light, 3 Small, 4 Large, 5 High Vortex, 6 Heavy, 7 High Perf, 8 Rotorcraft,
+  9 Glider, 10 Lighter-than-air, 11 Parachutist, 12 Ultralight, 14 UAV.
+- **Military (`is_mil`):** the aircraft's ICAO 24-bit hex address against
+  `MIL_RANGES`, a 32-entry table copied from readsb's `isMilRange()`
+  (`wiedehopf/readsb` `aircraft.c`, commit 3b5368a — the same list tar1090
+  uses), plus three US military callsign designators (`RCH`, `CNV`, `PAT`).
+  The US range is `ADF7C8–AFFFFF`: US civil N-number registrations fill
+  `A00001–ADF7C7` (N99999 = ADF7C7, 915,399 addresses), so everything above
+  that in the US block is non-civil. Canada is `C20000–C3FFFF`. Known limit:
+  the US range also holds some non-military federal aircraft.
+- **GA (`is_ga`):** rules applied in order —
+  1. Helicopter or military → not GA (keeps the three toggles independent).
+  2. Callsign prefix in `lib/enrich.py:AIRLINES` → not GA (covers e.g. FedEx
+     Caravan feeders, which fly as category 2 Light).
+  3. Category 2, 9, 10, 11, 12, or 14 → GA.
+  4. Category 4, 5, or 6 (airliner-sized) → not GA.
+  5. Otherwise, GA only if the callsign is not airline-style (a bare tail
+     number like `N123AB`, or no callsign at all).
 
-If `hide_ga` is true in a 10-mile Magnolia box, the board may be empty often (Hooks GA). Default `hide_ga: false`.
+  Known limit: a helicopter that never broadcasts a category shows as not a
+  helicopter (falls through to the GA/airline heuristics instead).
+
+`hidden(c, prefs)` returns `"heli"`, `"mil"`, `"ga"`, or `None`; `apply(cands,
+prefs)` (used in the hero poll path, §8 step 2) returns the candidate list
+unchanged when no filter is enabled. If `hide_ga` is true in a 10-mile
+Magnolia box, the board may be empty often (Hooks GA). Default `hide_ga: false`.
 
 ## 11. Security
 
@@ -359,8 +406,14 @@ lib/sun.py
 lib/schedule.py
 lib/bbox.py
 lib/dim.py
+lib/hero.py
+lib/enrich.py        # new (issue #2: on-device airline lookup)
+lib/filters.py       # new (issue #2: on-device heli/mil/ga filters)
+lib/logos/*.bmp       # new, generated (issue #2: on-device badges, not fetched)
 lib/card.py          # new
 lib/net.py           # new
+tools/gen_badges.py  # new, host-only (generates lib/logos/*.bmp)
+tests/test_enrich_filters.py  # new, host-only
 DESIGN.md            # this file
 README.md
 ```

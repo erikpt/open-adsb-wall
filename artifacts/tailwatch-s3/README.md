@@ -10,11 +10,14 @@ MatrixPortal S3 + 128x64 HUB75 panel.
 - `settings.toml` (Wi-Fi only -- copy from `settings.toml.example`; do **not** set `CIRCUITPY_WEB_API_PASSWORD`)
 - `www/index.html`
 - `lib/prefs.py`, `lib/sun.py`, `lib/schedule.py`, `lib/bbox.py`, `lib/urldecode.py`, `lib/tz.py`, `lib/dim.py`, `lib/hero.py`
+- `lib/enrich.py`, `lib/filters.py` (on-device airline lookup + heli/mil/GA filters, issue #2: no cloud)
+- `lib/logos/` (50 generated badge BMPs, ~17.7 KB total -- see `tools/gen_badges.py`)
 
 Libraries from the CircuitPython bundle:
 
 - `adafruit_httpserver`
 - `adafruit_ntp`
+- `adafruit_imageload` (decodes `lib/logos/*.bmp` badges)
 
 `tests/` (host-side checks, e.g. `tests/test_hero.py`) is plain Python for a
 computer's `python3` and is **not** copied to the CIRCUITPY drive.
