@@ -7,10 +7,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 TailWatch: a wall-mounted LED display (Adafruit MatrixPortal S3 + 128×64 HUB75
 panel, CircuitPython) that shows one live nearby aircraft at a time. Runs
 entirely on-device — no cloud API, no server component, no subscription (see
-`firmware/DESIGN.md` §2/§4 for why: issue #2 explicitly killed an earlier
-planned cloud tier). `firmware/DESIGN.md` is the authoritative spec; read it,
-not this file, for behavior/protocol details. `firmware/README.md` is the
-on-device file/flash-procedure reference.
+`DESIGN.md` §2/§4 for why: issue #2 explicitly killed an earlier planned cloud
+tier). `DESIGN.md` is the authoritative spec; read it, not this file, for
+behavior/protocol details. `README.md` is the on-device file/flash-procedure
+reference.
+
+Only what actually gets copied to the CIRCUITPY drive lives under
+`firmware/`; `DESIGN.md`, `README.md`, `docs/`, `enclosure/`, `tools/`, and
+`tests/` are host-only and live at the repo root.
 
 ## Branches
 
@@ -28,20 +32,19 @@ Firmware host-side tests (plain Python 3, stdlib only, no pytest, no
 CircuitPython — these are never copied to the device):
 
 ```sh
-cd firmware
 for f in tests/test_*.py; do python3 "$f" || exit 1; done   # full suite
 python3 tests/test_hero.py                                   # single file
 ```
 
-`tests/test_code_*.py` run the real `code.py` under faked CircuitPython
-modules (`board`, `wifi`, `displayio`, `adafruit_httpserver`, …) with a
-simulated clock — they check control flow and serial output, not real
+`tests/test_code_*.py` run the real `firmware/code.py` under faked
+CircuitPython modules (`board`, `wifi`, `displayio`, `adafruit_httpserver`, …)
+with a simulated clock — they check control flow and serial output, not real
 hardware.
 
 Enclosure (3D-printable case) — regenerate/verify after any `.scad` change:
 
 ```sh
-cd firmware/enclosure
+cd enclosure
 tools/build.sh                                    # OpenSCAD: STLs + preview PNGs + checks
 python3 tools/check_stl.py stl/*.stl              # manifold + bed-fit check only
 tools/export_blender_stls.sh && blender --background --python tools/blender_build.py  # Blender + glTF
@@ -56,23 +59,24 @@ export is the path to FreeCAD-compatible output instead.
 
 ## Architecture
 
-`code.py` is the firmware entry point: brings up the matrix/display, joins
-Wi-Fi (or falls back to a `TailWatch-XXXX` setup AP — `lib/wifisettings.py`,
-`lib/setupscreen.py`), runs the local settings HTTP server, and drives the
-poll loop. It is **not** a stub — see `firmware/DESIGN.md` §9's module table
-for what's built vs. still `to build` (`lib/net.py` the OpenSky HTTPS client,
-`lib/card.py` the real display renderer — `poll_card()` is currently a
-documented placeholder).
+`firmware/code.py` is the firmware entry point: brings up the matrix/display,
+joins Wi-Fi (or falls back to a `TailWatch-XXXX` setup AP —
+`firmware/lib/wifisettings.py`, `firmware/lib/setupscreen.py`), runs the local
+settings HTTP server, and drives the poll loop. It is **not** a stub — see
+`DESIGN.md` §9's module table for what's built vs. still `to build`
+(`firmware/lib/net.py` the OpenSky HTTPS client, `firmware/lib/card.py` the
+real display renderer — `poll_card()` is currently a documented placeholder).
 
-Everything else lives in `lib/`, one concern per module: `prefs.py` (load/
-save/validate), `hero.py` (which aircraft to show — has hysteresis to avoid
-flapping between near-equidistant planes), `enrich.py`/`filters.py`/`logos/`
-(on-device airline lookup, heli/mil/GA filtering, non-trademarked letter-mark
-badges — no scraped logos, no network fetch), `schedule.py`/`sun.py`/`tz.py`
-(sleep/night/brightness windows — has a clock-trust gate so a failed NTP sync
-can't strand the panel dark), `linkwatch.py`/`httpclient.py` (Wi-Fi reconnect
-watchdog and the shared always-closing HTTP client pattern `lib/net.py` must
-use), `reqguard.py` (same-origin/CSRF guard on the local API), `dim.py`
+Everything else lives in `firmware/lib/`, one concern per module: `prefs.py`
+(load/save/validate), `hero.py` (which aircraft to show — has hysteresis to
+avoid flapping between near-equidistant planes), `enrich.py`/`filters.py`/
+`logos/` (on-device airline lookup, heli/mil/GA filtering, non-trademarked
+letter-mark badges — no scraped logos, no network fetch),
+`schedule.py`/`sun.py`/`tz.py` (sleep/night/brightness windows — has a
+clock-trust gate so a failed NTP sync can't strand the panel dark),
+`linkwatch.py`/`httpclient.py` (Wi-Fi reconnect watchdog and the shared
+always-closing HTTP client pattern `firmware/lib/net.py` must use),
+`reqguard.py` (same-origin/CSRF guard on the local API), `dim.py`
 (color-scaled brightness — `rgbmatrix`'s `display.brightness` is effectively
 binary on this hardware, not a real dimmer).
 
@@ -83,9 +87,9 @@ binary on this hardware, not a real dimmer).
 Wiring the panel's external power supply there instead of the panel's own
 power input leaves the panel entirely USB-dependent (goes dark when USB-C is
 unplugged despite a "connected" external supply). Full explanation in
-`firmware/DESIGN.md` §3.
+`DESIGN.md` §3.
 
-The enclosure (`firmware/enclosure/`) is maintained in three parallel,
+The enclosure (`enclosure/`) is maintained in three parallel,
 cross-checked forms from one set of real measured dimensions
 (`enclosure/params.scad`): OpenSCAD/STL (source of truth, print-ready),
 Blender/glTF (for the website's interactive viewer — positioned by re-running

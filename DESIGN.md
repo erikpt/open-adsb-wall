@@ -66,10 +66,10 @@ either way. See the table above for a specific cable.
 [Phone browser]
     |  http://<s3-ip>/  or 192.168.4.1  (prefs only)
 [MatrixPortal S3]
-    |  lib/net.py: GET /api/states/all?lamin&lomin&lamax&lomax&extended=1
+    |  firmware/lib/net.py: GET /api/states/all?lamin&lomin&lamax&lomax&extended=1
     |  (OpenSky token optional, only to raise the anonymous rate limit)
 [OpenSky / ADS-B]
-    + on-device lib/hero.py, lib/filters.py, lib/enrich.py, lib/logos/
+    + on-device firmware/lib/hero.py, firmware/lib/filters.py, firmware/lib/enrich.py, firmware/lib/logos/
 ```
 
 No cloud tier (issue #2): each device polls OpenSky directly with its own
@@ -121,7 +121,7 @@ Rules:
 - sleep and night mode are independent: sleep blanks the panel; night only dims
 - booleans from HTML checkboxes: missing key on POST means `false`
 - JSON POSTs are partial merges: omitted keys (including booleans) keep their stored value; JSON booleans are used as-is
-- `tz_offset_min` + `us_dst` used for sleep/fixed night windows (lib/tz.py, fixed US DST rule only); sunset uses lat/lon solar math (UTC timestamps)
+- `tz_offset_min` + `us_dst` used for sleep/fixed night windows (firmware/lib/tz.py, fixed US DST rule only); sunset uses lat/lon solar math (UTC timestamps)
 
 Apply prefs immediately on save except Wi-Fi credentials (Wi-Fi stays in `settings.toml` for MVP).
 
@@ -134,11 +134,11 @@ lamin, lamax = lat ± dlat
 lomin, lomax = lon ± dlon
 ```
 
-Existing helper: `lib/bbox.py`.
+Existing helper: `firmware/lib/bbox.py`.
 
 ### Schedule
 
-Existing helpers: `lib/sun.py`, `lib/schedule.py`.
+Existing helpers: `firmware/lib/sun.py`, `firmware/lib/schedule.py`.
 
 Every ~1 s (or on prefs save):
 
@@ -146,15 +146,15 @@ Every ~1 s (or on prefs save):
 2. Else if night → `min(brightness_night, brightness_max)`
 3. Else → `min(brightness_day, brightness_max)`
 
-Dimming is done by scaling draw colours (`lib/dim.py` Dimmer). `display.brightness` is on/off on rgbmatrix, so it stays 1.0 while awake and 0.0 only for the black sleep state (blank group).
+Dimming is done by scaling draw colours (`firmware/lib/dim.py` Dimmer). `display.brightness` is on/off on rgbmatrix, so it stays 1.0 while awake and 0.0 only for the black sleep state (blank group).
 
-NTP at boot (UTC into RTC). The RTC and `sun.py` stay UTC. `schedule.py` computes local time as UTC + `tz_offset_min` (+60 min under the fixed US DST rule when `us_dst`) via `lib/tz.py`. No tz database: only the fixed US rule is supported.
+NTP at boot (UTC into RTC). The RTC and `sun.py` stay UTC. `schedule.py` computes local time as UTC + `tz_offset_min` (+60 min under the fixed US DST rule when `us_dst`) via `firmware/lib/tz.py`. No tz database: only the fixed US rule is supported.
 
 **Clock-trust gate (issue #11).** NTP can fail (no internet yet, AP mode, a
 flaky router), and after `microcontroller.reset()` the RTC may hold either a
 real time it kept across the reset, or CircuitPython's built-in epoch
-(commonly 2000-01-01). `lib/schedule.py:clock_trusted(ts=None)` returns true
-if NTP has synced this boot (`set_clock_synced(True)`, called by `code.py`'s
+(commonly 2000-01-01). `firmware/lib/schedule.py:clock_trusted(ts=None)` returns true
+if NTP has synced this boot (`set_clock_synced(True)`, called by `firmware/code.py`'s
 `sync_clock()`), or if `ts` (default `time.time()`) is already
 `>= MIN_TRUSTED_TS` (2024-01-01T00:00Z) -- the RTC-survived-reset case.
 `sleeping()` and `night()` return `False` when the clock isn't trusted
@@ -171,19 +171,19 @@ exposes the filesystem.
 
 | Route | Method | Purpose |
 |---|---|---|
-| `/` | GET | `www/index.html` |
-| `/api/prefs` | GET | current JSON minus `token`, plus `token_set` (`lib/prefs.py:public()`) |
+| `/` | GET | `firmware/www/index.html` |
+| `/api/prefs` | GET | current JSON minus `token`, plus `token_set` (`firmware/lib/prefs.py:public()`) |
 | `/api/prefs` | POST | form or JSON merge → save → apply brightness (station mode only) |
 | `/api/status` | GET | `{mode, ip, ssid, ap_ssid, networks, clock_synced, clock_trusted, rebooting, wifi_drops}` -- never a password |
-| `/api/wifi` | POST | JSON or form `{ssid, password, open}` → `lib/wifisettings.py` → `/settings.toml` → hard reset (§ AP mode below) |
+| `/api/wifi` | POST | JSON or form `{ssid, password, open}` → `firmware/lib/wifisettings.py` → `/settings.toml` → hard reset (§ AP mode below) |
 
 All `/api/*` routes require `Host` to be the device's own current address;
-POSTs also require a same-origin `Origin`/`Referer`, else `403` (`lib/reqguard.py`,
+POSTs also require a same-origin `Origin`/`Referer`, else `403` (`firmware/lib/reqguard.py`,
 issue #14). Reaching the UI by a DNS name instead of its IP therefore returns
 403 on every `/api/*` call -- the UI is documented as `http://<ip>/`, not a
 hostname.
 
-UI fields must match the schema in §6 (already drafted in `www/index.html`).
+UI fields must match the schema in §6 (already drafted in `firmware/www/index.html`).
 
 MVP discovery: print IPv4 on serial and on the LED (`SETUP 192.168.x.x`) if no card yet. mDNS `tailwatch.local` is a stretch goal (CircuitPython support is uneven).
 
@@ -208,11 +208,11 @@ If `CIRCUITPY_WIFI_SSID` is empty, or joining it fails (two 10 s
   `192.168.4.1`); the Wi-Fi form is shown above the regular prefs form.
 - Prefs save still writes `/prefs.json`, but the dimmer/brightness path is
   skipped in AP mode (`display.brightness = 1.0`, fixed `0x707070` setup
-  text via `lib/setupscreen.py`, so a slider at 0 or a sleep window can't
+  text via `firmware/lib/setupscreen.py`, so a slider at 0 or a sleep window can't
   hide the password).
 - No NTP attempt in AP mode (there is no internet).
 - `POST /api/wifi` is the **only** allow-listed `settings.toml` writer
-  (`lib/wifisettings.py`): it reads just `ssid`, `password`, `open` from the
+  (`firmware/lib/wifisettings.py`): it reads just `ssid`, `password`, `open` from the
   body (JSON or form; the body parser never reads the query string for this
   route, so a password can't leak into a URL/log), validates them, and
   rewrites just the two `CIRCUITPY_WIFI_*` keys via a `.new` →
@@ -222,7 +222,7 @@ If `CIRCUITPY_WIFI_SSID` is empty, or joining it fails (two 10 s
   deliberately **not** part of the `/prefs.json` schema (§6).
   - On success: `{ok, ssid, rebooting: true}`, then
     `microcontroller.reset()` about 3 s later (after the reply flushes).
-    The hard reset re-runs `boot.py` (remounts read-write) and the
+    The hard reset re-runs `firmware/boot.py` (remounts read-write) and the
     CircuitPython supervisor, which re-reads `settings.toml` and auto-joins;
     if the new credentials are wrong the device comes back up as the setup
     AP, so there's always an in-field recovery path.
@@ -245,7 +245,7 @@ OS never auto-launches a sign-in browser and the user has to already know to
 browse to `192.168.4.1`. Two pieces make that auto-pop instead, both AP-mode
 only:
 
-- **DNS hijack** (`lib/captiveportal.py`, `CaptiveDNS`): a UDP responder
+- **DNS hijack** (`firmware/lib/captiveportal.py`, `CaptiveDNS`): a UDP responder
   bound to `:53` on the AP-mode `socketpool.SocketPool`, polled once per main
   loop tick (`captive_dns.poll()`, non-blocking). It answers every class-IN
   A or ANY query with the AP's own IPv4 address, and every other query type
@@ -255,7 +255,7 @@ only:
   anything malformed or multi-question rather than guess at it. This is what
   makes the OS's captive-portal probe hostnames (e.g. Apple's
   `captive.apple.com`) resolve to this device at all.
-- **HTTP redirects for the known OS probe paths** (`code.py`,
+- **HTTP redirects for the known OS probe paths** (`firmware/code.py`,
   `CAPTIVE_CHECK_PATHS` / `captive_redirect`): Android (`/generate_204`,
   `/gen_204`), Apple (`/hotspot-detect.html`,
   `/library/test/success.html`), Windows (`/connecttest.txt`, `/ncsi.txt`,
@@ -274,7 +274,7 @@ sign-in browser to it.
 
 ### Wi-Fi drop recovery (station mode)
 
-Once joined as a station, `lib/linkwatch.py:LinkWatch` (`code.py`, station mode
+Once joined as a station, `firmware/lib/linkwatch.py:LinkWatch` (`firmware/code.py`, station mode
 only; `link = None` in AP mode) watches for a dropped link and re-joins it,
 because CircuitPython's own retries are limited and `adafruit_httpserver`
 otherwise keeps a listening socket bound to the address that just went away:
@@ -285,11 +285,11 @@ otherwise keeps a listening socket bound to the address that just went away:
   4 minutes total from the drop).
 - Recovered (its own `connect()`, or the radio recovering on its own) or the
   IP changed while up (DHCP lease change) both fire an "up" event; either way
-  `code.py` restarts the HTTP server (`restart_http()`) on the current host
+  `firmware/code.py` restarts the HTTP server (`restart_http()`) on the current host
   address. This covers a listening socket gone stale on the old interface even
   when the IP didn't change, at the cost of one rebind (`adafruit_httpserver`
   4.x sets `SO_REUSEADDR`, so rebinding port 80 works).
-- If all 6 reconnects fail, `code.py` calls `microcontroller.reset()`: the boot
+- If all 6 reconnects fail, `firmware/code.py` calls `microcontroller.reset()`: the boot
   then fails the ~20 s join and falls back to the setup AP (§ AP mode above),
   which itself reboots to retry after `AP_IDLE_RETRY_S` idle. A long router
   outage becomes a bounded retry loop with an always-recoverable device.
@@ -311,10 +311,10 @@ dimmer schedule), and the UI is unreachable during an outage anyway.
 
 ## 8. On-device card assembly (was "Cloud API")
 
-Superseded by issue #2: there is no server. `lib/net.py` (to build) calls
-OpenSky's `/api/states/all` directly with the device's own bbox (`lib/bbox.py`)
-and `extended=1`, then `lib/hero.py`, `lib/filters.py`, and `lib/enrich.py`
-assemble a card with this same shape on-device, for `lib/card.py` to render.
+Superseded by issue #2: there is no server. `firmware/lib/net.py` (to build) calls
+OpenSky's `/api/states/all` directly with the device's own bbox (`firmware/lib/bbox.py`)
+and `extended=1`, then `firmware/lib/hero.py`, `firmware/lib/filters.py`, and `firmware/lib/enrich.py`
+assemble a card with this same shape on-device, for `firmware/lib/card.py` to render.
 `prefs.api`/`prefs.token` (an OpenSky account, not a "cloud API" of ours) are
 only needed if OpenSky's anonymous rate limit proves too low in practice.
 
@@ -340,32 +340,32 @@ Card shape (assembled on-device, not an HTTP response):
 
 Empty sky: `ok: true`, `flight: null`.  
 Fetch failure (OpenSky unreachable, rate-limited, or malformed response):
-`lib/net.py` returns `None`/raises rather than an HTTP error code; `lib/hero.py`
+`firmware/lib/net.py` returns `None`/raises rather than an HTTP error code; `firmware/lib/hero.py`
 treats a failed poll as "no fresh candidates" (see `Hero.expired()`), not as
 "the hero left the box".
 
-Hero aircraft selection (on-device, `lib/hero.py`; see issue #2 — the S3 calls
+Hero aircraft selection (on-device, `firmware/lib/hero.py`; see issue #2 — the S3 calls
 OpenSky directly, so this runs on-device instead of on the server as originally
 sketched here):
 
-1. Positions in bbox, airborne (`on_ground` false); `lib/hero.py:candidates()`
+1. Positions in bbox, airborne (`on_ground` false); `firmware/lib/hero.py:candidates()`
    turns the raw OpenSky state vectors into candidate dicts, skipping ground
    traffic, rows without a position, and malformed rows.
-2. Apply hide_* filters (`lib/filters.py:apply()`, on-device, issue #2; a
+2. Apply hide_* filters (`firmware/lib/filters.py:apply()`, on-device, issue #2; a
    filtered-out hero is treated as rule (b), "gone")
 3. Prefer closest to pin; tie-break lower altitude then higher speed
-   (`lib/hero.py:_rank`)
-4. Enrich hex → type/reg; callsign prefix → airline + badge id (`lib/enrich.py:lookup()`,
+   (`firmware/lib/hero.py:_rank`)
+4. Enrich hex → type/reg; callsign prefix → airline + badge id (`firmware/lib/enrich.py:lookup()`,
    on-device, issue #2); route cache → OD pair + city + arriving/departing if possible
 5. If enrichment missing, still return callsign + alt + spd
 
-**`extended=1` is required.** `lib/net.py`'s OpenSky request must add
+**`extended=1` is required.** `firmware/lib/net.py`'s OpenSky request must add
 `&extended=1`, or every state vector's category comes back `None`: helicopters
-are never detected (`lib/filters.py:is_heli()` only matches category 8) and
+are never detected (`firmware/lib/filters.py:is_heli()` only matches category 8) and
 `is_ga()` falls back to the callsign-shape heuristic for everything.
 
 **Hysteresis / hold** — the shown aircraft is tracked by ICAO hex and only
-changes when one of these fires (`lib/hero.py:select()`, called each poll by
+changes when one of these fires (`firmware/lib/hero.py:select()`, called each poll by
 the `Hero` class):
 
 - **(a) Closer.** A challenger must be at least 20 % closer *and* at least
@@ -384,7 +384,7 @@ the `Hero` class):
   response: it left the box, landed (`on_ground`), was filtered out, or went
   out of coverage.
 - **(c) Too old.** Limit is `3 * poll_s`, clamped to 30–90 s (45 s at the
-  current 15 s poll interval; `lib/hero.py:stale_limit()`). Either:
+  current 15 s poll interval; `firmware/lib/hero.py:stale_limit()`). Either:
   - the position in the data is too old (response `time` minus
     `time_position`, or `last_contact` when that's missing), or
   - no successful poll has confirmed the hero within that limit
@@ -393,19 +393,19 @@ the `Hero` class):
     which the card would be misleading.
 
 When there is no current hero, the closest candidate is picked (same
-tie-break as above). Distances are statute miles, matching `lib/bbox.py`
+tie-break as above). Distances are statute miles, matching `firmware/lib/bbox.py`
 (69 mi/degree) and the prefs `nm` field, which despite its name is also miles
 each way.
 
 ### Badges (was `GET /v1/logo/{id}`)
 
 Superseded (issue #2): airline badges are no longer fetched from the cloud;
-everything below is baked into `lib/logos/<key>.bmp` at build time, one file
-per `lib/enrich.py:AIRLINES` entry plus a generic fallback (`_unk.bmp`), all
+everything below is baked into `firmware/lib/logos/<key>.bmp` at build time, one file
+per `firmware/lib/enrich.py:AIRLINES` entry plus a generic fallback (`_unk.bmp`), all
 4-bit indexed BMP (`adafruit_imageload.load()` / `displayio.OnDiskBitmap()`,
 one badge in RAM at a time). No PNG, no network round-trip, no server.
 
-Two build tools produce `lib/logos/`, and both can coexist:
+Two build tools produce `firmware/lib/logos/`, and both can coexist:
 
 - `tools/gen_badges.py` (host-only, stdlib-only, Pillow-free): draws
   non-trademarked 24×24 letter-mark badges (IATA/ICAO code, hand-drawn 3×5
@@ -423,11 +423,11 @@ Two build tools produce `lib/logos/`, and both can coexist:
   background, while `AIRLINES`'s colors were already picked to be legible
   there. The extra palette steps (vs. the letter-mark's 3) are what keep a
   logo's thin strokes and antialiasing from collapsing into a blob at this
-  size; `lib/dim.py`'s `scale_palette()` rescales a palette of any length the
+  size; `firmware/lib/dim.py`'s `scale_palette()` rescales a palette of any length the
   same way, so night-mode dimming needs no changes for either badge type.
 
-Priority is automatic and needs no runtime code: `lib/enrich.py:badge_path()`
-is a direct `lib/logos/<key>.bmp` path lookup with no separate resolution
+Priority is automatic and needs no runtime code: `firmware/lib/enrich.py:badge_path()`
+is a direct `firmware/lib/logos/<key>.bmp` path lookup with no separate resolution
 step, so whichever tool last wrote that file is what loads. The two tools
 stay consistent via `tools/logo_sources/sources.json`, a manifest
 `{icao: source_filename}` that `convert_logos.py` writes and `gen_badges.py`
@@ -542,25 +542,25 @@ need no cache: they are static files already on the drive.
 
 | Module | Role | Status |
 |---|---|---|
-| `lib/prefs.py` | load/save/clamp/form merge | exists |
-| `lib/sun.py` | sunrise/sunset | exists |
-| `lib/schedule.py` | sleep/night/brightness | exists |
-| `lib/bbox.py` | OpenSky box | exists |
-| `lib/dim.py` | colour-scale dimming + sleep blank | exists |
-| `lib/tz.py` | UTC offset + fixed US DST rule | exists |
-| `lib/urldecode.py` | percent-decode form bodies | exists |
-| `lib/buttons.py` | hold-to-trigger button helper | exists |
-| `lib/nyan.py` | easter egg animation | exists |
-| `lib/hero.py` | hero-aircraft selection + hysteresis (on-device, issue #2) | exists |
-| `lib/enrich.py` | callsign → airline name + badge key/path, on-device (issue #2) | exists |
-| `lib/filters.py` | on-device hide_heli / hide_mil / hide_ga (issue #2; §10) | exists |
-| `www/index.html` | settings UI | exists |
-| `code.py` | matrix, Wi-Fi join / setup-AP fallback, station reconnect watchdog, web UI server (auto-restart), NTP, dimmer schedule; poll_card() is still a placeholder until lib/net.py | exists (poll path placeholder) |
-| `lib/linkwatch.py` | station Wi-Fi drop detection, bounded reconnect (6 tries, ~4 min), then hard reset into setup AP | exists |
-| `lib/httpclient.py` | shared adafruit_requests Session, 4 s timeout, 8 s/32 KB body cap, always-close get_json() for lib/net.py | exists |
-| `lib/captiveportal.py` | AP-mode captive-portal DNS responder (issue #21; §7 AP mode) | exists |
-| `lib/card.py` | render 128×64 card | **to build** |
-| `lib/net.py` | HTTPS GET nearby (must pass `extended=1`; §8) | **to build** |
+| `firmware/lib/prefs.py` | load/save/clamp/form merge | exists |
+| `firmware/lib/sun.py` | sunrise/sunset | exists |
+| `firmware/lib/schedule.py` | sleep/night/brightness | exists |
+| `firmware/lib/bbox.py` | OpenSky box | exists |
+| `firmware/lib/dim.py` | colour-scale dimming + sleep blank | exists |
+| `firmware/lib/tz.py` | UTC offset + fixed US DST rule | exists |
+| `firmware/lib/urldecode.py` | percent-decode form bodies | exists |
+| `firmware/lib/buttons.py` | hold-to-trigger button helper | exists |
+| `firmware/lib/nyan.py` | easter egg animation | exists |
+| `firmware/lib/hero.py` | hero-aircraft selection + hysteresis (on-device, issue #2) | exists |
+| `firmware/lib/enrich.py` | callsign → airline name + badge key/path, on-device (issue #2) | exists |
+| `firmware/lib/filters.py` | on-device hide_heli / hide_mil / hide_ga (issue #2; §10) | exists |
+| `firmware/www/index.html` | settings UI | exists |
+| `firmware/code.py` | matrix, Wi-Fi join / setup-AP fallback, station reconnect watchdog, web UI server (auto-restart), NTP, dimmer schedule; poll_card() is still a placeholder until firmware/lib/net.py | exists (poll path placeholder) |
+| `firmware/lib/linkwatch.py` | station Wi-Fi drop detection, bounded reconnect (6 tries, ~4 min), then hard reset into setup AP | exists |
+| `firmware/lib/httpclient.py` | shared adafruit_requests Session, 4 s timeout, 8 s/32 KB body cap, always-close get_json() for firmware/lib/net.py | exists |
+| `firmware/lib/captiveportal.py` | AP-mode captive-portal DNS responder (issue #21; §7 AP mode) | exists |
+| `firmware/lib/card.py` | render 128×64 card | **to build** |
+| `firmware/lib/net.py` | HTTPS GET nearby (must pass `extended=1`; §8) | **to build** |
 
 ### Display card (128×64)
 
@@ -576,7 +576,7 @@ Layout (pixel budget):
 +--------------------------------------------+
 ```
 
-- Badge: local `lib/logos/<key>.bmp`, loaded via `adafruit_imageload.load()`
+- Badge: local `firmware/lib/logos/<key>.bmp`, loaded via `adafruit_imageload.load()`
   or `displayio.OnDiskBitmap()` (§8, issue #2). Up to **48×48**: a real
   sourced carrier logo (`tools/convert_logos.py`, issue #18) where one exists
   (49/49 `AIRLINES` entries, as of this writing), else a generated 24×24
@@ -584,7 +584,7 @@ Layout (pixel budget):
   `_unk` badge and for any airline added to `AIRLINES` before a real logo is
   sourced for it. See §8 Badges for the licensing note and how the two
   coexist. Register
-  one badge palette in `lib/dim.py` and overwrite its colours on each hero
+  one badge palette in `firmware/lib/dim.py` and overwrite its colours on each hero
   swap (`Dimmer.add_palette` only ever adds, so swapping badges by adding a
   fresh palette every poll would leak memory) — note a real logo's palette
   is longer (8 entries) than a letter-mark's (3), so this still-to-build
@@ -596,25 +596,25 @@ Layout (pixel budget):
 - No data: `NO TRAFFIC` + local time
 - Error: `NO LINK` (do not crash the HTTP server)
 
-`bit_depth=4` (set via `BIT_DEPTH` in `code.py`); 3 gives only 7 lit levels per channel. Do not use 6+ for MVP.
+`bit_depth=4` (set via `BIT_DEPTH` in `firmware/code.py`); 3 gives only 7 lit levels per channel. Do not use 6+ for MVP.
 
 ### Poll loop
 
 - `server.poll()` every iteration
 - ADS-B poll every 15 s when not sleeping
-- Outbound HTTP only via `lib/httpclient.py` (4 s per-socket-op timeout, 8 s body budget, response always closed; worst-case stall ~16 s); keep last good card
+- Outbound HTTP only via `firmware/lib/httpclient.py` (4 s per-socket-op timeout, 8 s body budget, response always closed; worst-case stall ~16 s); keep last good card
 - Skip NTP/poll and `server.poll()` while `LinkWatch` reports the link down
 - Never block the UI server for more than one poll
 
 ## 10. Filters
 
-On-device (`lib/filters.py`, issue #2 — no server blocklist). Heuristic MVP,
+On-device (`firmware/lib/filters.py`, issue #2 — no server blocklist). Heuristic MVP,
 documented as imperfect:
 
 - **Helicopter (`is_heli`):** true only when OpenSky's ADS-B emitter
   `category == 8` (Rotorcraft). This field is state-vector index 17 and is
   only populated when the `/states/all` request includes `&extended=1`
-  (`lib/net.py`, **to build**) — without it every category is `None` and no
+  (`firmware/lib/net.py`, **to build**) — without it every category is `None` and no
   helicopter is ever detected. Category values: 0 no info, 1 no category info,
   2 Light, 3 Small, 4 Large, 5 High Vortex, 6 Heavy, 7 High Perf, 8 Rotorcraft,
   9 Glider, 10 Lighter-than-air, 11 Parachutist, 12 Ultralight, 14 UAV.
@@ -628,7 +628,7 @@ documented as imperfect:
   the US range also holds some non-military federal aircraft.
 - **GA (`is_ga`):** rules applied in order —
   1. Helicopter or military → not GA (keeps the three toggles independent).
-  2. Callsign prefix in `lib/enrich.py:AIRLINES` → not GA (covers e.g. FedEx
+  2. Callsign prefix in `firmware/lib/enrich.py:AIRLINES` → not GA (covers e.g. FedEx
      Caravan feeders, which fly as category 2 Light).
   3. Category 2, 9, 10, 11, 12, or 14 → GA.
   4. Category 4, 5, or 6 (airliner-sized) → not GA.
@@ -647,8 +647,8 @@ Magnolia box, the board may be empty often (Hooks GA). Default `hide_ga: false`.
 
 - No cloud tier, so no device/cloud token to manage (issue #2)
 - Local UI has no auth in MVP (LAN trust). Do not expose the S3 port to WAN
-- OpenSky token (optional, only to raise the anonymous rate limit) lives in `/prefs.json` on-device. It is write-only: `token` is never present in a `GET`/`POST` `/api/prefs` response, only a `token_set` boolean (`lib/prefs.py:public()`, `lib/reqguard.py`, issue #14)
-- All `/api/*` routes require `Host` to match the device's own current address (blocks DNS rebinding); POSTs also require a same-origin `Origin` (or `Referer` if no `Origin`), or a `403` (blocks CSRF from another site the LAN browser has open) -- `lib/reqguard.py`, checked by `code.py:_guard()`
+- OpenSky token (optional, only to raise the anonymous rate limit) lives in `/prefs.json` on-device. It is write-only: `token` is never present in a `GET`/`POST` `/api/prefs` response, only a `token_set` boolean (`firmware/lib/prefs.py:public()`, `firmware/lib/reqguard.py`, issue #14)
+- All `/api/*` routes require `Host` to match the device's own current address (blocks DNS rebinding); POSTs also require a same-origin `Origin` (or `Referer` if no `Origin`), or a `403` (blocks CSRF from another site the LAN browser has open) -- `firmware/lib/reqguard.py`, checked by `firmware/code.py:_guard()`
 - CIRCUITPY is writable; do not put secrets in git
 
 ## 12. Implementation order (coding agent)
@@ -656,26 +656,26 @@ Magnolia box, the board may be empty often (Hooks GA). Default `hide_ga: false`.
 Do these PRs/slices in order. Each slice must run on hardware or have a clear mock.
 
 1. ~~**Harden existing prefs + UI**~~ — done (issues #4, #5)
-2. **Card renderer** — `lib/card.py`, hardcoded style card on 128×64 -- **to build**
+2. **Card renderer** — `firmware/lib/card.py`, hardcoded style card on 128×64 -- **to build**
 3. ~~**Schedule live**~~ — done (issue #7); ~~**Brightness dimming**~~ — done (issue #8)
-4. **OpenSky HTTPS client** — `lib/net.py`: `poll_card()` hits OpenSky's `/api/states/all` directly with bbox + `extended=1`, optional token; parse JSON, via `lib/httpclient.py` -- **to build**
-5. ~~**Lookup tables + badges**~~ — done (issue #10: `lib/enrich.py`, `lib/filters.py`, `lib/logos/`)
-6. ~~**Hero selection**~~ — done (issue #9: `lib/hero.py`)
+4. **OpenSky HTTPS client** — `firmware/lib/net.py`: `poll_card()` hits OpenSky's `/api/states/all` directly with bbox + `extended=1`, optional token; parse JSON, via `firmware/lib/httpclient.py` -- **to build**
+5. ~~**Lookup tables + badges**~~ — done (issue #10: `firmware/lib/enrich.py`, `firmware/lib/filters.py`, `firmware/lib/logos/`)
+6. ~~**Hero selection**~~ — done (issue #9: `firmware/lib/hero.py`)
 7. **AP fallback** — if no Wi-Fi (issue #11, in progress)
-8. **Wire it together** — `code.py`'s poll loop calls `lib/net.py` → `lib/filters.py` → `lib/hero.py` → `lib/card.py`, replacing the placeholder `poll_card()`  
+8. **Wire it together** — `firmware/code.py`'s poll loop calls `firmware/lib/net.py` → `firmware/lib/filters.py` → `firmware/lib/hero.py` → `firmware/lib/card.py`, replacing the placeholder `poll_card()`  
 
 Do not start a rewrite in ESP-IDF unless CircuitPython HTTPS + HTTP server cannot coexist. If it cannot, port modules 1:1 to Arduino/ESP-IDF and keep this spec.
 
 ## 13. Acceptance tests
 
 Host-side tests are plain Python 3 (stdlib only, no pytest) and are not copied
-to CIRCUITPY. Run them all from `firmware/`:
+to CIRCUITPY. Run them all from the repo root:
 
 ```
 for f in tests/test_*.py; do python3 "$f" || exit 1; done
 ```
 
-`tests/test_code_*.py` run the real `code.py` under fake CircuitPython modules
+`tests/test_code_*.py` run the real `firmware/code.py` under fake CircuitPython modules
 (`board`, `wifi`, `displayio`, `adafruit_httpserver`, ...) with a simulated
 clock: they check control flow and serial output, not the panel or the radio.
 
@@ -691,13 +691,13 @@ clock: they check control flow and serial output, not the panel or the radio.
 | Fixed night hours or after local sunset → night slider, capped by `brightness_max`; `night_mode=off` → day level; fixed US DST rule boundaries (§6 Schedule) | `tests/test_schedule.py` |
 | Clock-trust gate: default-epoch RTC never blanks or night-dims; NTP-synced or ≥ 2024 RTC applies the schedule (§6, issue #11) | `tests/test_schedule_clock.py` |
 | Dimmer: level 0 → blank group + `display.brightness = 0.0`; wake restores the awake group at 1.0; palettes rescaled from base colours (no compounding) with the min-visible floor (§6) | `tests/test_dim.py` |
-| `code.py`: in a sleep window the panel level is 0.0 and no ADS-B poll runs; awake, the poll's bbox comes from the saved pin (§6, §9 Poll loop) | `tests/test_code_schedule.py` |
-| `code.py` setup AP: no SSID → WPA2 `TailWatch-XXXX`, 8-char password from the 32-symbol alphabet, fresh each boot, printed once, quietest of channels 1/6/11, UI on 192.168.4.1, no NTP, stays up indefinitely; SSID configured but unreachable → two join attempts, AP, reboot after `AP_IDLE_RETRY_S` idle (§7 AP mode) | `tests/test_code_apmode.py` |
+| `firmware/code.py`: in a sleep window the panel level is 0.0 and no ADS-B poll runs; awake, the poll's bbox comes from the saved pin (§6, §9 Poll loop) | `tests/test_code_schedule.py` |
+| `firmware/code.py` setup AP: no SSID → WPA2 `TailWatch-XXXX`, 8-char password from the 32-symbol alphabet, fresh each boot, printed once, quietest of channels 1/6/11, UI on 192.168.4.1, no NTP, stays up indefinitely; SSID configured but unreachable → two join attempts, AP, reboot after `AP_IDLE_RETRY_S` idle (§7 AP mode) | `tests/test_code_apmode.py` |
 | `settings.toml` Wi-Fi writer: validation, form parsing, TOML escaping, other keys kept, crash-safe swap + `recover()` (§7 AP mode) | `tests/test_wifisettings.py` |
 | `CaptiveDNS._build`: A/ANY query answered with the AP's IP, AAAA gets NOERROR/no-answer, malformed packets dropped, transaction ID echoed (§7 AP mode, issue #21) | `tests/test_captiveportal.py` |
-| `code.py` AP mode: a DNS query fed to the poll loop gets answered with the AP's own IP; captive-check HTTP routes (`/generate_204`, `/hotspot-detect.html`, ...) registered only in AP mode (§7 AP mode, issue #21) | `tests/test_code_apmode.py` |
+| `firmware/code.py` AP mode: a DNS query fed to the poll loop gets answered with the AP's own IP; captive-check HTTP routes (`/generate_204`, `/hotspot-detect.html`, ...) registered only in AP mode (§7 AP mode, issue #21) | `tests/test_code_apmode.py` |
 | LinkWatch: grace period, 6 bounded reconnects then give-up, self-recovery, IP change while up, radio errors count as down, password never printed (§7 Wi-Fi drop recovery) | `tests/test_linkwatch.py` |
-| `code.py` link handling: drop + rejoin on a new IP moves the UI server; gives up → hard reset; 5 consecutive `server.poll()` errors restart the server; no `server.poll()` while down (§7 Wi-Fi drop recovery) | `tests/test_code_linkwatch.py` |
+| `firmware/code.py` link handling: drop + rejoin on a new IP moves the UI server; gives up → hard reset; 5 consecutive `server.poll()` errors restart the server; no `server.poll()` while down (§7 Wi-Fi drop recovery) | `tests/test_code_linkwatch.py` |
 | Outbound HTTP: one Session reused, timeout passed, response always closed, non-200 + `Retry-After`, mid-body error, 8 s / 32 KB caps (§9 Poll loop) | `tests/test_httpclient.py` |
 | Hero: candidate parsing (ground / no-position / malformed skipped; `states: null` → no candidates), closest + tie-break, hysteresis rules (a)(b)(c), no flapping, `Hero.expired()` (§8) | `tests/test_hero.py` |
 | Filters heli / mil / GA and `apply()` on hero candidates; airline prefix lookup; badges committed, current, and decodable (§8 Badges, §10) | `tests/test_enrich_filters.py` |
@@ -707,14 +707,14 @@ clock: they check control flow and serial output, not the panel or the radio.
 
 Add a host test for each item when its code lands, not before.
 
-- **Empty sky → `NO TRAFFIC` + local time, not a crash.** Needs `lib/card.py`
+- **Empty sky → `NO TRAFFIC` + local time, not a crash.** Needs `firmware/lib/card.py`
   (§12 slice 2). The data side is covered in `tests/test_hero.py` (`states: null`
   → no candidates; `select(None, [])` → `(None, "none")`).
 - **OpenSky unreachable / 429 / malformed JSON → panel `NO LINK`, last good card
-  kept, web UI still answers.** Needs `lib/net.py`, `lib/card.py`, and §12
+  kept, web UI still answers.** Needs `firmware/lib/net.py`, `firmware/lib/card.py`, and §12
   slice 4. The client side is covered in `tests/test_httpclient.py`.
 - **Sleep makes no OpenSky request.** `tests/test_code_schedule.py` currently
-  checks this via the `poll_card()` stub's `box` serial line; once `lib/net.py`
+  checks this via the `poll_card()` stub's `box` serial line; once `firmware/lib/net.py`
   replaces the stub, switch it to counting fake `httpclient.get_json` calls.
 
 ### 13.3 Manual, on hardware only
@@ -722,7 +722,7 @@ Add a host test for each item when its code lands, not before.
 - Power: full-white bench draw ~15 W @ 5 V from the panel PSU; USB-C powers
   only the S3; firmware never changes the power wiring (§3).
 - From a phone on the same LAN, save lat/lon at `http://<s3-ip>/`, power-cycle,
-  values persist (exercises `boot.py`'s read-write remount). Booted with UP
+  values persist (exercises `firmware/boot.py`'s read-write remount). Booted with UP
   held, a save returns 503.
 - Sleep window: panel physically dark, serial shows no `box` lines. The night
   level is visibly distinct from gray labels at `BIT_DEPTH = 4`.
@@ -734,38 +734,41 @@ Add a host test for each item when its code lands, not before.
   a hard reset into the setup AP.
 - Web Workflow off: no `CIRCUITPY_WEB_API_PASSWORD`; the UI binds port 80
   (no `http start failed`).
-- After `lib/net.py` / `lib/card.py`: a real OpenSky poll returns categories
+- After `firmware/lib/net.py` / `firmware/lib/card.py`: a real OpenSky poll returns categories
   (`extended=1`); card and badge are legible on the 128×64 panel; `NO LINK`
   with the uplink unplugged.
 
 ## 14. Repo / files
 
-Keep under `firmware/` unless the agent is given another root.
+Only what is actually copied to the CIRCUITPY drive lives under `firmware/`
+(`code.py`, `lib/`, `www/`, `settings.toml.example`, `prefs.example.json`).
+Everything host-only -- build tools, tests, this spec -- lives at the repo
+root instead.
 
 ```
-code.py
-settings.toml.example
-prefs.example.json
-www/index.html
-lib/prefs.py
-lib/sun.py
-lib/schedule.py
-lib/bbox.py
-lib/dim.py
-lib/hero.py
-lib/enrich.py        # new (issue #2: on-device airline lookup)
-lib/filters.py       # new (issue #2: on-device heli/mil/ga filters)
-lib/logos/*.bmp       # new, generated (issue #2: on-device badges, not fetched;
+firmware/code.py
+firmware/settings.toml.example
+firmware/prefs.example.json
+firmware/www/index.html
+firmware/lib/prefs.py
+firmware/lib/sun.py
+firmware/lib/schedule.py
+firmware/lib/bbox.py
+firmware/lib/dim.py
+firmware/lib/hero.py
+firmware/lib/enrich.py        # new (issue #2: on-device airline lookup)
+firmware/lib/filters.py       # new (issue #2: on-device heli/mil/ga filters)
+firmware/lib/logos/*.bmp       # new, generated (issue #2: on-device badges, not fetched;
                        #   issue #18: real logo where sourced, else letter-mark)
-lib/card.py          # new
-lib/net.py           # new
-lib/wifisettings.py  # new (issue #11: AP-mode settings.toml Wi-Fi writer)
-lib/setupscreen.py   # new (issue #11: panel setup-AP credentials screen)
-lib/linkwatch.py     # new (station Wi-Fi drop detection + bounded reconnect)
-lib/httpclient.py    # new (shared, always-closing adafruit_requests client for lib/net.py)
-lib/captiveportal.py # new (issue #21: AP-mode captive-portal DNS responder)
-tools/gen_badges.py     # new, host-only (generates lib/logos/*.bmp letter-marks)
-tools/convert_logos.py  # new, host-only (issue #18: real logos -> lib/logos/*.bmp)
+firmware/lib/card.py          # new
+firmware/lib/net.py           # new
+firmware/lib/wifisettings.py  # new (issue #11: AP-mode settings.toml Wi-Fi writer)
+firmware/lib/setupscreen.py   # new (issue #11: panel setup-AP credentials screen)
+firmware/lib/linkwatch.py     # new (station Wi-Fi drop detection + bounded reconnect)
+firmware/lib/httpclient.py    # new (shared, always-closing adafruit_requests client for firmware/lib/net.py)
+firmware/lib/captiveportal.py # new (issue #21: AP-mode captive-portal DNS responder)
+tools/gen_badges.py     # new, host-only (generates firmware/lib/logos/*.bmp letter-marks)
+tools/convert_logos.py  # new, host-only (issue #18: real logos -> firmware/lib/logos/*.bmp)
 tools/logo_sources/     # new (issue #18: sourced logo images + sources.json manifest)
 tests/test_enrich_filters.py    # host-only
 tests/test_hero.py              # host-only
@@ -780,11 +783,11 @@ tests/test_schedule_clock.py    # host-only (issue #11 clock-trust gate)
 tests/test_wifisettings.py      # host-only (issue #11)
 tests/test_linkwatch.py         # host-only
 tests/test_httpclient.py        # host-only
-tests/test_code_linkwatch.py    # host-only (runs code.py with fake CircuitPython modules)
-tests/test_code_schedule.py     # host-only (code.py sim: sleep skips poll, bbox from prefs)
-tests/test_code_apmode.py       # host-only (code.py sim: setup-AP fallback, captive DNS + redirects)
+tests/test_code_linkwatch.py    # host-only (runs firmware/code.py with fake CircuitPython modules)
+tests/test_code_schedule.py     # host-only (firmware/code.py sim: sleep skips poll, bbox from prefs)
+tests/test_code_apmode.py       # host-only (firmware/code.py sim: setup-AP fallback, captive DNS + redirects)
 tests/test_captiveportal.py     # host-only (issue #21: CaptiveDNS._build wire format)
-lib/reqguard.py      # new (issue #14: same-origin/CSRF guard)
+firmware/lib/reqguard.py      # new (issue #14: same-origin/CSRF guard)
 DESIGN.md            # this file
 README.md
 ```
@@ -796,7 +799,7 @@ README.md
 - Do not add Google/FlightRadar scraped APIs
 - Do not commit tokens
 - Match existing helper APIs rather than renaming without cause
-- When unsure of MatrixPortal pin names, use `board.MTX_*` as in current `code.py`
+- When unsure of MatrixPortal pin names, use `board.MTX_*` as in current `firmware/code.py`
 - Update README with any new library bundle names
 
 ## 16. Reference context

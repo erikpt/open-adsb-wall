@@ -7,7 +7,7 @@ import os
 import sys
 from contextlib import redirect_stdout
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware", "lib"))
 
 import linkwatch  # noqa: E402
 from linkwatch import (CHECK_S, DOWN, GAVE_UP, GRACE_S, MAX_RECONNECTS,  # noqa: E402
