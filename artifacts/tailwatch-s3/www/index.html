@@ -15,11 +15,14 @@ button{margin-top:1rem;padding:.6rem 1rem;width:100%}
 .check input{width:auto}
 h1{font-size:1.2rem}
 .muted{color:#aaa;font-size:.85rem}
+.warn{background:#4a3200;color:#ffd58a;padding:.5rem .6rem;border-radius:4px;font-size:.9rem}
 </style>
 </head>
 <body>
 <h1>TailWatch</h1>
 <p class="muted" id="status">loading…</p>
+<p class="warn" id="apnote" hidden>Setup mode: TailWatch could not join <b id="cfgssid"></b>. Enter your Wi-Fi below.</p>
+<p class="warn" id="clockwarn" hidden>Clock not set (no internet time yet). Sleep and night schedules are paused; the panel stays at day brightness.</p>
 <form id="f" method="POST" action="/api/prefs">
 <label>Latitude</label><input name="lat" id="lat" step="any"/>
 <label>Longitude</label><input name="lon" id="lon" step="any"/>
@@ -73,7 +76,22 @@ h1{font-size:1.2rem}
 <label>Device token</label><input name="token" id="token" autocomplete="off"/>
 <button type="submit">Save</button>
 </form>
+
+<form id="wf" method="POST" action="/api/wifi">
+<h2>Wi-Fi</h2>
+<p class="muted" id="wifistate"></p>
+<label>Network name (SSID)</label>
+<input name="ssid" id="wssid" list="nets" maxlength="32" required autocomplete="off" autocapitalize="none" spellcheck="false"/>
+<datalist id="nets"></datalist>
+<label>Password</label>
+<input name="password" id="wpw" type="password" maxlength="64" autocomplete="new-password"/>
+<div class="check"><input type="checkbox" name="open" id="wopen" value="1"/><span>Open network (no password)</span></div>
+<div class="check"><input type="checkbox" id="wshow"/><span>Show password</span></div>
+<button type="submit">Save Wi-Fi &amp; restart</button>
+<p class="muted">TailWatch restarts to join this network. If it can't, it comes back as the TailWatch-XXXX setup hotspot (name and password shown on the panel).</p>
+</form>
 <script>
+const $=id=>document.getElementById(id);
 function set(id,v){const el=document.getElementById(id);if(!el)return;
   if(el.type==="checkbox")el.checked=!!v;
   else{if(el.tagName==="SELECT"&&v!=null&&![...el.options].some(o=>o.value===String(v))){
@@ -90,8 +108,40 @@ function sync(){
 fetch("/api/prefs").then(r=>r.json()).then(p=>{
   Object.keys(p).forEach(k=>set(k,p[k]));
   sync();
-  status.textContent="prefs loaded";
-}).catch(()=>{status.textContent="could not load prefs";});
+  $("status").textContent="prefs loaded";
+}).catch(()=>{$("status").textContent="could not load prefs";});
+function refreshStatus(){
+  return fetch("/api/status").then(r=>r.json()).then(s=>{
+    $("clockwarn").hidden=!!s.clock_trusted;
+    if(s.mode==="ap"){
+      $("apnote").hidden=false;
+      $("cfgssid").textContent=s.ssid||"(no network configured)";
+      document.body.insertBefore($("wf"),$("f"));
+      $("wifistate").textContent="Connected to setup hotspot "+s.ap_ssid;
+    }else{
+      $("wifistate").textContent="Connected to "+s.ssid+" ("+s.ip+")";
+    }
+    if(!$("wssid").value)$("wssid").value=s.ssid||"";
+    $("nets").replaceChildren(...(s.networks||[]).map(n=>{
+      const o=document.createElement("option");o.value=n.ssid;o.label=n.rssi+" dBm";return o;}));
+    return s;
+  }).catch(()=>null);
+}
+// In AP mode this poll doubles as a keepalive: code.py reboots an idle setup AP.
+refreshStatus().then(s=>{if(s&&s.mode==="ap")setInterval(refreshStatus,60000);});
+$("wshow").addEventListener("change",e=>{$("wpw").type=e.target.checked?"text":"password";});
+$("wopen").addEventListener("change",e=>{$("wpw").disabled=e.target.checked;});
+$("wf").addEventListener("submit",e=>{
+  e.preventDefault();
+  const body={ssid:$("wssid").value,password:$("wpw").value,open:$("wopen").checked};
+  $("wifistate").textContent="saving…";
+  fetch("/api/wifi",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
+    .then(r=>r.json().then(j=>({ok:r.ok,j})))
+    .then(({ok,j})=>{$("wifistate").textContent=ok
+      ?"Saved. TailWatch is restarting to join "+j.ssid+". Reconnect this phone to that network; the new address is on serial and in your router's device list."
+      :"Not saved: "+(j.error||"unknown error");})
+    .catch(()=>{$("wifistate").textContent="No reply -- TailWatch may already be restarting.";});
+});
 </script>
 </body>
 </html>

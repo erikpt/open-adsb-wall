@@ -127,6 +127,19 @@ Dimming is done by scaling draw colours (`lib/dim.py` Dimmer). `display.brightne
 
 NTP at boot (UTC into RTC). The RTC and `sun.py` stay UTC. `schedule.py` computes local time as UTC + `tz_offset_min` (+60 min under the fixed US DST rule when `us_dst`) via `lib/tz.py`. No tz database: only the fixed US rule is supported.
 
+**Clock-trust gate (issue #11).** NTP can fail (no internet yet, AP mode, a
+flaky router), and after `microcontroller.reset()` the RTC may hold either a
+real time it kept across the reset, or CircuitPython's built-in epoch
+(commonly 2000-01-01). `lib/schedule.py:clock_trusted(ts=None)` returns true
+if NTP has synced this boot (`set_clock_synced(True)`, called by `code.py`'s
+`sync_clock()`), or if `ts` (default `time.time()`) is already
+`>= MIN_TRUSTED_TS` (2024-01-01T00:00Z) -- the RTC-survived-reset case.
+`sleeping()` and `night()` return `False` when the clock isn't trusted
+(never blank the panel or apply night dimming on a bogus timestamp);
+`brightness()` then falls through to `min(brightness_day, brightness_max)`.
+`GET /api/status` exposes both `clock_synced` and `clock_trusted` so the web
+UI can show a "clock not set" banner.
+
 ## 7. Local web UI
 
 Static files in `/www`. Server: `adafruit_httpserver` on port 80. Web Workflow
@@ -137,20 +150,61 @@ exposes the filesystem.
 |---|---|---|
 | `/` | GET | `www/index.html` |
 | `/api/prefs` | GET | current JSON |
-| `/api/prefs` | POST | form or JSON merge → save → apply brightness |
+| `/api/prefs` | POST | form or JSON merge → save → apply brightness (station mode only) |
+| `/api/status` | GET | `{mode, ip, ssid, ap_ssid, networks, clock_synced, clock_trusted, rebooting}` -- never a password |
+| `/api/wifi` | POST | JSON or form `{ssid, password, open}` → `lib/wifisettings.py` → `/settings.toml` → hard reset (§ AP mode below) |
 
 UI fields must match the schema in §6 (already drafted in `www/index.html`).
 
 MVP discovery: print IPv4 on serial and on the LED (`SETUP 192.168.x.x`) if no card yet. mDNS `tailwatch.local` is a stretch goal (CircuitPython support is uneven).
 
-### AP mode (first boot)
+### AP mode (first boot, issue #11)
 
-If `CIRCUITPY_WIFI_SSID` empty or join fails for 20 s:
+If `CIRCUITPY_WIFI_SSID` is empty, or joining it fails (two 10 s
+`wifi.radio.connect()` attempts, ~20 s total):
 
-- Start AP `TailWatch-XXXX` (last 4 of MAC)
-- Serve the same UI at `192.168.4.1`
-- Prefs save still writes `/prefs.json`
-- Wi-Fi SSID/password write to `settings.toml` is optional in MVP; if too risky on live CIRCUITPY, collect Wi-Fi in prefs and document a manual `settings.toml` step
+- Scan for nearby networks first (`wifi.radio.start_scanning_networks()`,
+  before `stop_station()` -- the radio can't scan once it's AP-only), for the
+  UI's SSID datalist and to pick whichever of channels 1/6/11 has the fewest
+  networks.
+- Start a **WPA2, password-protected** AP `TailWatch-XXXX` (last two MAC
+  bytes), `wifi.radio.start_ap(ssid, pw, channel=…, authmode=[WPA2, PSK],
+  max_connections=2)`. The password is 8 random characters from a 32-symbol
+  alphabet (no `l`/`o`/`0`/`1`), generated fresh every boot with
+  `os.urandom`, never persisted, and only shown on the panel (and serial) --
+  not open, because on the AP `GET /api/prefs` returns the device token and
+  `POST /api/wifi` can repoint the device at another network, so being able
+  to read the password proves you're standing at the device.
+- Serve the same UI at `wifi.radio.ipv4_address_ap` (normally
+  `192.168.4.1`); the Wi-Fi form is shown above the regular prefs form.
+- Prefs save still writes `/prefs.json`, but the dimmer/brightness path is
+  skipped in AP mode (`display.brightness = 1.0`, fixed `0x707070` setup
+  text via `lib/setupscreen.py`, so a slider at 0 or a sleep window can't
+  hide the password).
+- No NTP attempt in AP mode (there is no internet).
+- `POST /api/wifi` is the **only** allow-listed `settings.toml` writer
+  (`lib/wifisettings.py`): it reads just `ssid`, `password`, `open` from the
+  body (JSON or form; the body parser never reads the query string for this
+  route, so a password can't leak into a URL/log), validates them, and
+  rewrites just the two `CIRCUITPY_WIFI_*` keys via a `.new` →
+  `path`↔`.bak` → rename swap (crash-safe; `recover()` finishes an
+  interrupted swap on the next boot). Everything else in `settings.toml` is
+  kept, and the previous file survives as `settings.toml.bak`. Wi-Fi is
+  deliberately **not** part of the `/prefs.json` schema (§6).
+  - On success: `{ok, ssid, rebooting: true}`, then
+    `microcontroller.reset()` about 3 s later (after the reply flushes).
+    The hard reset re-runs `boot.py` (remounts read-write) and the
+    CircuitPython supervisor, which re-reads `settings.toml` and auto-joins;
+    if the new credentials are wrong the device comes back up as the setup
+    AP, so there's always an in-field recovery path.
+  - `ValueError` (bad SSID/password) → 400 with the message; `OSError`
+    (booted with UP held, filesystem read-only) → 503, same pattern as
+    `/api/prefs`, and the device does not reboot.
+- **Idle retry.** If an SSID *is* configured (e.g. the router was
+  rebooting), the device reboots to retry the join after 600 s with no
+  `/api/*` request. The setup page polls `/api/status` every 60 s while in
+  AP mode, which keeps the device up while someone has it open. With no
+  SSID configured at all, the device stays in AP mode indefinitely.
 
 Hold BOOT 5 s to clear Wi-Fi settings is a stretch goal.
 
@@ -409,8 +463,12 @@ lib/filters.py       # new (issue #2: on-device heli/mil/ga filters)
 lib/logos/*.bmp       # new, generated (issue #2: on-device badges, not fetched)
 lib/card.py          # new
 lib/net.py           # new
+lib/wifisettings.py  # new (issue #11: AP-mode settings.toml Wi-Fi writer)
+lib/setupscreen.py   # new (issue #11: panel setup-AP credentials screen)
 tools/gen_badges.py  # new, host-only (generates lib/logos/*.bmp)
-tests/test_enrich_filters.py  # new, host-only
+tests/test_enrich_filters.py    # new, host-only
+tests/test_wifisettings.py      # new, host-only (issue #11)
+tests/test_schedule_clock.py    # new, host-only (issue #11)
 DESIGN.md            # this file
 README.md
 ```
