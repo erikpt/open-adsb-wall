@@ -9,12 +9,15 @@ MatrixPortal S3 + 128x64 HUB75 panel.
 - `prefs.json` (copy from `prefs.example.json`)
 - `settings.toml` (Wi-Fi only -- copy from `settings.toml.example`; do **not** set `CIRCUITPY_WEB_API_PASSWORD`)
 - `www/index.html`
-- `lib/prefs.py`, `lib/sun.py`, `lib/schedule.py`, `lib/bbox.py`, `lib/urldecode.py`, `lib/tz.py`, `lib/dim.py`
+- `lib/prefs.py`, `lib/sun.py`, `lib/schedule.py`, `lib/bbox.py`, `lib/urldecode.py`, `lib/tz.py`, `lib/dim.py`, `lib/hero.py`
 
 Libraries from the CircuitPython bundle:
 
 - `adafruit_httpserver`
 - `adafruit_ntp`
+
+`tests/` (host-side checks, e.g. `tests/test_hero.py`) is plain Python for a
+computer's `python3` and is **not** copied to the CIRCUITPY drive.
 
 ## Updating files (read-only USB drive)
 

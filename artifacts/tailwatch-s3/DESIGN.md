@@ -190,13 +190,52 @@ Response (always small):
 Empty sky: `ok: true`, `flight: null`.  
 Errors: HTTP 401/429/502 with `{"ok": false, "error": "..."}`.
 
-Hero aircraft selection (server):
+Hero aircraft selection (on-device, `lib/hero.py`; see issue #2 — the S3 calls
+OpenSky directly, so this runs on-device instead of on the server as originally
+sketched here):
 
-1. Positions in bbox, airborne (`on_ground` false)
-2. Apply hide_* filters
+1. Positions in bbox, airborne (`on_ground` false); `lib/hero.py:candidates()`
+   turns the raw OpenSky state vectors into candidate dicts, skipping ground
+   traffic, rows without a position, and malformed rows.
+2. Apply hide_* filters (future `lib/filters.py`; a filtered-out hero is
+   treated as rule (b), "gone")
 3. Prefer closest to pin; tie-break lower altitude then higher speed
+   (`lib/hero.py:_rank`)
 4. Enrich hex → type/reg; callsign prefix → airline + logo id; route cache → OD pair + city + arriving/departing if possible
 5. If enrichment missing, still return callsign + alt + spd
+
+**Hysteresis / hold** — the shown aircraft is tracked by ICAO hex and only
+changes when one of these fires (`lib/hero.py:select()`, called each poll by
+the `Hero` class):
+
+- **(a) Closer.** A challenger must be at least 20 % closer *and* at least
+  0.5 mi closer than the current hero, and the current hero must have been
+  shown for at least 30 s (`SWITCH_RATIO`, `MIN_GAP_MI`, `MIN_DWELL_S`).
+  - 20 %: at 15 s polls a jet at ~250 kt covers ~1.2 mi/poll; in a 10 mi box,
+    20 % of a typical 5 mi distance is ~1 mi, comfortably above OpenSky's
+    position-delay jitter (~0.3–0.4 mi), so noise alone can't trigger a swap.
+  - Swapping back needs the old hero to become ~36 % closer than it was,
+    which takes real movement, not noise — so a switch does not bounce back.
+  - 0.5 mi minimum: near the pin, 20 % is smaller than position noise, so an
+    absolute floor is also required.
+  - 30 s = two polls at the 15 s poll interval, so the card stays up long
+    enough to read; it has no effect once polls are >= 30 s.
+- **(b) Gone.** The hero's hex is absent from a *successful* OpenSky
+  response: it left the box, landed (`on_ground`), was filtered out, or went
+  out of coverage.
+- **(c) Too old.** Limit is `3 * poll_s`, clamped to 30–90 s (45 s at the
+  current 15 s poll interval; `lib/hero.py:stale_limit()`). Either:
+  - the position in the data is too old (response `time` minus
+    `time_position`, or `last_contact` when that's missing), or
+  - no successful poll has confirmed the hero within that limit
+    (`Hero.expired(now)`, for repeated fetch failures).
+  - The 90 s cap exists because a plane at 250 kt moves ~6 mi in 90 s, past
+    which the card would be misleading.
+
+When there is no current hero, the closest candidate is picked (same
+tie-break as above). Distances are statute miles, matching `lib/bbox.py`
+(69 mi/degree) and the prefs `nm` field, which despite its name is also miles
+each way.
 
 ### `GET /v1/logo/{id}`
 
@@ -225,6 +264,7 @@ MVP: Cloudflare Worker + KV/R2 is enough for two devices. Linode if FlightAware 
 | `lib/urldecode.py` | percent-decode form bodies | exists |
 | `lib/buttons.py` | hold-to-trigger button helper | exists |
 | `lib/nyan.py` | easter egg animation | exists |
+| `lib/hero.py` | hero-aircraft selection + hysteresis (on-device, issue #2) | exists |
 | `www/index.html` | settings UI | exists |
 | `code.py` | matrix, HTTP, poll loop | stub |
 | `lib/card.py` | render 128×64 card | **to build** |
