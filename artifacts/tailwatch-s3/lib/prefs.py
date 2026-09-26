@@ -43,17 +43,73 @@ _FLOATS = {
 }
 
 
+_TIMES = ("night_start", "night_end", "sleep_start", "sleep_end")
+
+
+def _bad(k, v):
+    # Serial diagnostic: a rejected value is replaced by its default and the
+    # next save() overwrites it, so it cannot silently persist.
+    print("prefs: invalid %s=%r, using default %r" % (k, v, DEFAULTS[k]))
+    return DEFAULTS[k]
+
+
+def _float(p, k):
+    """float(p[k]), or DEFAULTS[k] (with a diagnostic) if it will not parse.
+
+    bool is rejected explicitly: isinstance(True, int) is True.
+    """
+    v = p.get(k)
+    try:
+        if isinstance(v, bool):
+            raise TypeError
+        return float(v)
+    except (ValueError, TypeError):
+        return _bad(k, v)
+
+
+def _in_range(p, k, lo, hi):
+    """_float(p, k) if lo <= x <= hi, else DEFAULTS[k]. NaN fails the test."""
+    x = _float(p, k)
+    if not (lo <= x <= hi):
+        return _bad(k, p.get(k))
+    return x
+
+
+def _hhmm(v):
+    """Normalise "H:MM"/"HH:MM" (surrounding spaces ok) to "HH:MM", else None."""
+    if not isinstance(v, str):
+        return None
+    parts = v.strip().split(":")
+    if len(parts) != 2:
+        return None
+    h, m = parts
+    if not (1 <= len(h) <= 2 and len(m) == 2 and h.isdigit() and m.isdigit()):
+        return None
+    try:
+        h, m = int(h), int(m)  # isdigit() admits some non-ASCII digits on CPython
+    except ValueError:
+        return None
+    if h > 23 or m > 59:
+        return None
+    return "%02d:%02d" % (h, m)
+
+
 def _clamp(p):
-    p["nm"] = max(1.0, min(50.0, float(p["nm"])))
+    p["lat"] = _in_range(p, "lat", -90.0, 90.0)
+    p["lon"] = _in_range(p, "lon", -180.0, 180.0)
+    for k in _TIMES:
+        t = _hhmm(p.get(k))
+        p[k] = t if t is not None else _bad(k, p.get(k))
+    p["nm"] = max(1.0, min(50.0, _float(p, "nm")))
     for k in ("brightness_day", "brightness_night", "brightness_max"):
-        p[k] = max(0.0, min(1.0, float(p[k])))
+        p[k] = max(0.0, min(1.0, _float(p, k)))
     if p["brightness_day"] > p["brightness_max"]:
         p["brightness_day"] = p["brightness_max"]
     if p["brightness_night"] > p["brightness_max"]:
         p["brightness_night"] = p["brightness_max"]
     try:
         off = int(round(float(p["tz_offset_min"])))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):  # OverflowError: round(inf)
         off = DEFAULTS["tz_offset_min"]
     p["tz_offset_min"] = max(-720, min(840, off))  # UTC-12:00 .. UTC+14:00
     p.pop("timezone", None)  # legacy IANA string: unresolvable on-device, drop it
