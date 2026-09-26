@@ -3,7 +3,7 @@
 Status: implementable MVP  
 Hardware target: Adafruit MatrixPortal S3 + indoor P2 SMD1515 128×64 HUB75 panel  
 Companion: none -- the device calls OpenSky directly and assembles cards on-device (see issue #2; no cloud API)  
-Existing starter: `artifacts/tailwatch-s3/` (`code.py`, `lib/*`, `www/index.html`, `prefs.example.json`)
+Existing starter: `firmware/` (`code.py`, `lib/*`, `www/index.html`, `prefs.example.json`)
 
 This document is the spec. Do not invent product scope beyond it. Prefer small, working slices over frameworks.
 
@@ -13,7 +13,7 @@ This document is the spec. Do not invent product scope beyond it. Prefer small, 
 
 A wall display that shows **one live aircraft card** for traffic near a user-configured GPS point, without requiring a subscription app.
 
-Two physical units will exist (owner + friend). Each unit owns its own lat/lon and display prefs on-device. A shared cloud API supplies flight cards and logos. OpenSky (or compatible ADS-B) is the position source.
+Two physical units will exist (owner + friend). Each unit owns its own lat/lon and display prefs on-device, and assembles its own flight cards and badges locally (issue #2: no cloud tier). OpenSky (or compatible ADS-B) is the position source.
 
 ## 2. Non-goals (MVP)
 
@@ -399,19 +399,24 @@ Layout (pixel budget):
 
 ```
 +------------------+----------------------------+
-| 24×24 badge      | Airline                     |
-|                  | FLIGHT  ROUTE               |
+| up to 48×48      | Airline                     |
+| badge            | FLIGHT  ROUTE               |
 +------------------+ TYPE                        |
 | city / phase                               |
 | ALT  SPD  TRK                              |
 +--------------------------------------------+
 ```
 
-- Badge: local `lib/logos/<key>.bmp` (24×24, 4-bit indexed), loaded via
-  `adafruit_imageload.load()` or `displayio.OnDiskBitmap()` (§8, issue #2).
-  Register one badge palette in `lib/dim.py` and overwrite its colours on
-  each hero swap (`Dimmer.add_palette` only ever adds, so swapping badges by
-  adding a fresh palette every poll would leak memory)
+- Badge: local `lib/logos/<key>.bmp`, loaded via `adafruit_imageload.load()`
+  or `displayio.OnDiskBitmap()` (§8, issue #2). The current set
+  (`tools/gen_badges.py`) generates non-trademarked 24×24 letter-mark badges;
+  the layout actually has room for up to **48×48**. Issue #18 tracks sourcing
+  real carrier logos at that size, with the generated letter-mark badge kept
+  as a per-airline/build fallback (not a wholesale replacement) given the
+  licensing considerations of shipping real logos. Register one badge palette
+  in `lib/dim.py` and overwrite its colours on each hero swap
+  (`Dimmer.add_palette` only ever adds, so swapping badges by adding a fresh
+  palette every poll would leak memory)
 - Font: `terminalio.FONT` or a bundled 5×7 / 6×12 bitmap font
 - Colors: white text, dim gray labels, badge as-is
 - Sleep: empty group / brightness 0
@@ -491,7 +496,7 @@ Do not start a rewrite in ESP-IDF unless CircuitPython HTTPS + HTTP server canno
 ## 13. Acceptance tests
 
 Host-side tests are plain Python 3 (stdlib only, no pytest) and are not copied
-to CIRCUITPY. Run them all from `artifacts/tailwatch-s3/`:
+to CIRCUITPY. Run them all from `firmware/`:
 
 ```
 for f in tests/test_*.py; do python3 "$f" || exit 1; done
@@ -560,7 +565,7 @@ Add a host test for each item when its code lands, not before.
 
 ## 14. Repo / files
 
-Keep under `artifacts/tailwatch-s3/` unless the agent is given another root.
+Keep under `firmware/` unless the agent is given another root.
 
 ```
 code.py
@@ -603,8 +608,6 @@ lib/reqguard.py      # new (issue #14: same-origin/CSRF guard)
 DESIGN.md            # this file
 README.md
 ```
-
-Cloud worker may live in `artifacts/tailwatch-api/` when started.
 
 ## 15. Coding rules for the agent
 

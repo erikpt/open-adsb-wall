@@ -223,7 +223,7 @@ Adafruit's GitHub instead:
 ## Rebuilding and checking
 
 ```sh
-artifacts/tailwatch-s3/enclosure/tools/build.sh
+firmware/enclosure/tools/build.sh
 ```
 
 This exports every STL, renders `preview/*.png` (it uses `xvfb-run` when
@@ -277,8 +277,8 @@ mismatch with the OpenSCAD source of truth. Instead:
 To regenerate after an OpenSCAD change:
 
 ```sh
-artifacts/tailwatch-s3/enclosure/tools/export_blender_stls.sh
-blender --background --python artifacts/tailwatch-s3/enclosure/tools/blender_build.py
+firmware/enclosure/tools/export_blender_stls.sh
+blender --background --python firmware/enclosure/tools/blender_build.py
 ```
 
 (Blender's bundled Python needs `numpy` for its glTF exporter addon; if you
