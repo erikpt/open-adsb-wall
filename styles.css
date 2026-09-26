@@ -283,6 +283,39 @@ h2 { font-size: clamp(1.5rem, 2.5vw, 2rem); }
   margin-top: 20px;
 }
 
+/* ---- enclosure gallery ---- */
+
+.gallery {
+  display: grid;
+  gap: 12px;
+}
+
+.gallery-main {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #000;
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.gallery-grid img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #000;
+}
+
+@media (max-width: 640px) {
+  .gallery-grid { grid-template-columns: 1fr 1fr; }
+}
+
 /* ---- cta ---- */
 
 .cta-section { text-align: center; }
