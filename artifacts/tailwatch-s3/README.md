@@ -14,6 +14,8 @@ MatrixPortal S3 + 128x64 HUB75 panel.
 - `lib/logos/` (50 generated badge BMPs, ~17.7 KB total -- see `tools/gen_badges.py`)
 - `lib/wifisettings.py` (settings.toml Wi-Fi writer, AP-mode provisioning, issue #11)
 - `lib/setupscreen.py` (panel setup-AP credentials screen, issue #11)
+- `lib/linkwatch.py` (station Wi-Fi drop detection + bounded reconnect watchdog)
+- `lib/httpclient.py` (shared, always-closing adafruit_requests client pattern for the future `lib/net.py`)
 
 Libraries from the CircuitPython bundle:
 
@@ -21,6 +23,7 @@ Libraries from the CircuitPython bundle:
 - `adafruit_ntp`
 - `adafruit_imageload` (decodes `lib/logos/*.bmp` badges)
 - `adafruit_display_text` (setup-AP credentials screen, `lib/setupscreen.py`)
+- `adafruit_requests`, `adafruit_connection_manager` (needed once `lib/net.py` starts making HTTPS requests via `lib/httpclient.py`)
 
 `tests/` (host-side checks, e.g. `tests/test_hero.py`) is plain Python for a
 computer's `python3` and is **not** copied to the CIRCUITPY drive.
@@ -63,6 +66,7 @@ does not re-run it.
 - Filters stored: `hide_heli`, `hide_ga`, `hide_mil`
 - 10 miles each way → OpenSky bbox (printed to serial until `lib/net.py` is wired)
 - No cloud API -- OpenSky is called directly from the device; hero selection, filters, and airline badges all run on-device (`lib/hero.py`, `lib/filters.py`, `lib/enrich.py`, `lib/logos/`)
+- If Wi-Fi drops, TailWatch retries the join for ~4 min (serial shows `wifi:` lines), moves the web UI to the new IP, and otherwise reboots into the setup AP.
 
 ## First-time / new Wi-Fi setup
 
