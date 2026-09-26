@@ -237,6 +237,41 @@ If `CIRCUITPY_WIFI_SSID` is empty, or joining it fails (two 10 s
 
 Hold BOOT 5 s to clear Wi-Fi settings is a stretch goal.
 
+**Captive-portal auto-pop (issue #21).** A plain setup AP with no DNS/HTTP
+tricks leaves a joining phone/laptop's own network stack unable to tell
+there's anything to sign in to -- its captive-portal detection probes just
+time out (AP mode has no internet to resolve or reach anything real), so the
+OS never auto-launches a sign-in browser and the user has to already know to
+browse to `192.168.4.1`. Two pieces make that auto-pop instead, both AP-mode
+only:
+
+- **DNS hijack** (`lib/captiveportal.py`, `CaptiveDNS`): a UDP responder
+  bound to `:53` on the AP-mode `socketpool.SocketPool`, polled once per main
+  loop tick (`captive_dns.poll()`, non-blocking). It answers every class-IN
+  A or ANY query with the AP's own IPv4 address, and every other query type
+  (AAAA, HTTPS/SVCB, ...) with a NOERROR/no-answer reply so the resolver
+  falls through to an A query instead of stalling. It is not a general
+  resolver -- there's nothing upstream to forward anything to -- and drops
+  anything malformed or multi-question rather than guess at it. This is what
+  makes the OS's captive-portal probe hostnames (e.g. Apple's
+  `captive.apple.com`) resolve to this device at all.
+- **HTTP redirects for the known OS probe paths** (`code.py`,
+  `CAPTIVE_CHECK_PATHS` / `captive_redirect`): Android (`/generate_204`,
+  `/gen_204`), Apple (`/hotspot-detect.html`,
+  `/library/test/success.html`), Windows (`/connecttest.txt`, `/ncsi.txt`,
+  `/redirect`), and Firefox (`/success.txt`), registered only
+  `if ap_mode`. Each OS actually expects one specific "you have real
+  internet" response (Android: bare 204; Apple: one exact HTML string;
+  Windows: specific plain-text bodies) and treats *anything else* as "there's
+  a portal here" -- so a redirect to `http://<host>/` is enough to trigger
+  that path; trying to instead mimic each OS's exact expected success body
+  would be more code for the same result and would have to be kept in sync
+  with OS behavior that can change.
+
+Together: DNS hijack gets the probe request to this device; the redirect
+response is what makes the OS conclude a portal is present and open its
+sign-in browser to it.
+
 ### Wi-Fi drop recovery (station mode)
 
 Once joined as a station, `lib/linkwatch.py:LinkWatch` (`code.py`, station mode
@@ -403,6 +438,7 @@ need no cache: they are static files already on the drive.
 | `code.py` | matrix, Wi-Fi join / setup-AP fallback, station reconnect watchdog, web UI server (auto-restart), NTP, dimmer schedule; poll_card() is still a placeholder until lib/net.py | exists (poll path placeholder) |
 | `lib/linkwatch.py` | station Wi-Fi drop detection, bounded reconnect (6 tries, ~4 min), then hard reset into setup AP | exists |
 | `lib/httpclient.py` | shared adafruit_requests Session, 4 s timeout, 8 s/32 KB body cap, always-close get_json() for lib/net.py | exists |
+| `lib/captiveportal.py` | AP-mode captive-portal DNS responder (issue #21; §7 AP mode) | exists |
 | `lib/card.py` | render 128×64 card | **to build** |
 | `lib/net.py` | HTTPS GET nearby (must pass `extended=1`; §8) | **to build** |
 
@@ -534,6 +570,8 @@ clock: they check control flow and serial output, not the panel or the radio.
 | `code.py`: in a sleep window the panel level is 0.0 and no ADS-B poll runs; awake, the poll's bbox comes from the saved pin (§6, §9 Poll loop) | `tests/test_code_schedule.py` |
 | `code.py` setup AP: no SSID → WPA2 `TailWatch-XXXX`, 8-char password from the 32-symbol alphabet, fresh each boot, printed once, quietest of channels 1/6/11, UI on 192.168.4.1, no NTP, stays up indefinitely; SSID configured but unreachable → two join attempts, AP, reboot after `AP_IDLE_RETRY_S` idle (§7 AP mode) | `tests/test_code_apmode.py` |
 | `settings.toml` Wi-Fi writer: validation, form parsing, TOML escaping, other keys kept, crash-safe swap + `recover()` (§7 AP mode) | `tests/test_wifisettings.py` |
+| `CaptiveDNS._build`: A/ANY query answered with the AP's IP, AAAA gets NOERROR/no-answer, malformed packets dropped, transaction ID echoed (§7 AP mode, issue #21) | `tests/test_captiveportal.py` |
+| `code.py` AP mode: a DNS query fed to the poll loop gets answered with the AP's own IP; captive-check HTTP routes (`/generate_204`, `/hotspot-detect.html`, ...) registered only in AP mode (§7 AP mode, issue #21) | `tests/test_code_apmode.py` |
 | LinkWatch: grace period, 6 bounded reconnects then give-up, self-recovery, IP change while up, radio errors count as down, password never printed (§7 Wi-Fi drop recovery) | `tests/test_linkwatch.py` |
 | `code.py` link handling: drop + rejoin on a new IP moves the UI server; gives up → hard reset; 5 consecutive `server.poll()` errors restart the server; no `server.poll()` while down (§7 Wi-Fi drop recovery) | `tests/test_code_linkwatch.py` |
 | Outbound HTTP: one Session reused, timeout passed, response always closed, non-200 + `Retry-After`, mid-body error, 8 s / 32 KB caps (§9 Poll loop) | `tests/test_httpclient.py` |
@@ -600,6 +638,7 @@ lib/wifisettings.py  # new (issue #11: AP-mode settings.toml Wi-Fi writer)
 lib/setupscreen.py   # new (issue #11: panel setup-AP credentials screen)
 lib/linkwatch.py     # new (station Wi-Fi drop detection + bounded reconnect)
 lib/httpclient.py    # new (shared, always-closing adafruit_requests client for lib/net.py)
+lib/captiveportal.py # new (issue #21: AP-mode captive-portal DNS responder)
 tools/gen_badges.py  # new, host-only (generates lib/logos/*.bmp)
 tests/test_enrich_filters.py    # host-only
 tests/test_hero.py              # host-only
@@ -616,7 +655,8 @@ tests/test_linkwatch.py         # host-only
 tests/test_httpclient.py        # host-only
 tests/test_code_linkwatch.py    # host-only (runs code.py with fake CircuitPython modules)
 tests/test_code_schedule.py     # host-only (code.py sim: sleep skips poll, bbox from prefs)
-tests/test_code_apmode.py       # host-only (code.py sim: setup-AP fallback)
+tests/test_code_apmode.py       # host-only (code.py sim: setup-AP fallback, captive DNS + redirects)
+tests/test_captiveportal.py     # host-only (issue #21: CaptiveDNS._build wire format)
 lib/reqguard.py      # new (issue #14: same-origin/CSRF guard)
 DESIGN.md            # this file
 README.md

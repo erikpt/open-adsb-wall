@@ -39,7 +39,7 @@ def _ap_fake_modules():
     return m
 
 
-def run_ap(ssid, end):
+def run_ap(ssid, end, events=None):
     """Boot code.py with CIRCUITPY_WIFI_SSID = ssid and a radio that can't join."""
     real_getenv = os.getenv
 
@@ -48,7 +48,7 @@ def run_ap(ssid, end):
 
     sim.fake_modules, os.getenv = _ap_fake_modules, getenv
     try:
-        return sim.run({}, end)
+        return sim.run(events or {}, end)
     finally:
         sim.fake_modules, os.getenv = _orig_fake_modules, real_getenv
 
@@ -90,6 +90,49 @@ def test_fresh_password_each_boot():
     run_ap("", 5)
     b = sim.W.ap[0][1]
     assert a != b, (a, b)   # os.urandom per boot; 1-in-2**40 false failure
+
+
+def _dns_query(tid, name, qtype=1, qclass=1):
+    """Hand-built raw DNS query (see tests/test_captiveportal.py for the format)."""
+    def qname(n):
+        out = b""
+        for label in n.split("."):
+            out += bytes([len(label)]) + label.encode("ascii")
+        return out + b"\x00"
+
+    header = tid.to_bytes(2, "big") + (0x0100).to_bytes(2, "big")
+    header += (1).to_bytes(2, "big") + (0).to_bytes(2, "big")
+    header += (0).to_bytes(2, "big") + (0).to_bytes(2, "big")
+    return header + qname(name) + qtype.to_bytes(2, "big") + qclass.to_bytes(2, "big")
+
+
+def test_captive_dns_answers_with_ap_ip():
+    query = _dns_query(0x1234, "captive.apple.com")
+    events = {50: lambda w: w.dns_queries.append((query, ("10.0.0.5", 12345)))}
+    outcome, out = run_ap("", 100, events)
+    assert outcome == "stop", (outcome, out[-800:])
+    assert len(sim.W.dns_sent) == 1, sim.W.dns_sent
+    resp, addr = sim.W.dns_sent[0]
+    assert addr == ("10.0.0.5", 12345)
+    tid = (resp[0] << 8) | resp[1]
+    ancount = (resp[6] << 8) | resp[7]
+    assert tid == 0x1234
+    assert ancount == 1
+    assert resp[-4:] == bytes([192, 168, 4, 1]), resp[-4:]  # the AP's own IP
+
+
+def test_captive_check_routes_registered_only_in_ap_mode():
+    run_ap("", 5)
+    ap_paths = [p for p, _ in sim.W.routes]
+    for needle in ("/generate_204", "/gen_204", "/hotspot-detect.html",
+                   "/library/test/success.html", "/connecttest.txt",
+                   "/ncsi.txt", "/redirect", "/success.txt"):
+        assert needle in ap_paths, (needle, ap_paths)
+
+    sim.run({}, 5)  # plain station-mode boot: never reaches AP mode
+    station_paths = [p for p, _ in sim.W.routes]
+    assert "/generate_204" not in station_paths, station_paths
+    assert "/api/prefs" in station_paths, station_paths  # sanity: routes are recorded at all
 
 
 if __name__ == "__main__":
