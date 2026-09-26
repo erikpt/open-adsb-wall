@@ -9,6 +9,8 @@ cd "$(dirname "$0")/.."
 OPENSCAD=${OPENSCAD:-openscad}
 XVFB=""
 if [ -z "${DISPLAY:-}" ] && command -v xvfb-run >/dev/null; then XVFB="xvfb-run -a"; fi
+# Printer build volume (X Y Z, mm) -- keep in sync with `bed` in params.scad
+BED="200 200 250"
 PARTS="frame_left frame_right strap portal_pod button_rods bowtie_keys"
 mkdir -p stl preview logs
 
@@ -34,4 +36,4 @@ $XVFB $OPENSCAD -o preview/detail_buttons.png --imgsize=1200,900 --colorscheme=T
 grep -E "WARNING|frame_back_z" logs/assembly.log || true
 
 echo "== STL checks"
-python3 tools/check_stl.py stl/*.stl
+python3 tools/check_stl.py --bed $BED stl/*.stl

@@ -6,6 +6,7 @@ volume, and a manifold test (every edge must be used by exactly two
 triangles, once in each direction).  Pure standard library.
 
 usage: check_stl.py [--bed X Y Z] file.stl [file.stl ...]
+Default bed: 200 x 200 x 250 mm.
 exit status 1 if any file is empty, non-manifold or too big for the bed.
 """
 import struct
@@ -68,7 +69,7 @@ def check(path, bed):
 
 
 def main(argv):
-    bed = [220.0, 220.0, 250.0]
+    bed = [200.0, 200.0, 250.0]   # actual printer build volume (X, Y, Z)
     if len(argv) > 1 and argv[1] == "--bed":
         bed = [float(v) for v in argv[2:5]]
         argv = argv[:1] + argv[5:]

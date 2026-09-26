@@ -18,7 +18,8 @@
 // =====================================================================
 
 /* ---------- Print volume (every part is checked against this) ---------- */
-bed = [220, 220, 250];            // X, Y, Z build volume in mm
+bed = [200, 200, 250];            // X, Y, Z build volume in mm (the actual printer;
+                                  //   keep tools/build.sh BED in sync)
 
 /* ---------- LED panel ---------- */
 panel_w   = 256;                  // [VERIFIED] 128 px * 2.0 mm pitch
@@ -259,6 +260,11 @@ module run_checks() {
     _warn(len([for (sx = strap_xs) if (sx < seam_x) 1]) == 0 ||
           len([for (sx = strap_xs) if (sx > seam_x) 1]) == 0,
           "each frame half needs at least one strap");
+    _rod_len = tip_min - btn_gap - (x_pad_in - pad_t);
+    _warn(_rod_len > max(bed[0], bed[1]) - 5,
+          str("push-rods are ", _rod_len, " mm long -- too long for the bed"));
+    _warn(panel_w/2 + C + W > min(bed[0], bed[1]) || panel_h + 2*(C + W) > max(bed[0], bed[1]),
+          "a frame half no longer fits the bed");
     echo(str("frame_back_z = ", frame_back_z, " mm (total frame depth ",
              frame_back_z + face_proud, " mm)"));
 }
