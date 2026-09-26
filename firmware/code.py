@@ -11,7 +11,7 @@ import wifi
 import socketpool
 import rtc
 import adafruit_ntp
-from adafruit_httpserver import Server, Request, Response, Status, GET, POST
+from adafruit_httpserver import Server, Request, Response, Status, GET, POST, Redirect
 
 from prefs import load, apply_form, public
 from urldecode import unquote_plus
@@ -21,6 +21,7 @@ from dim import Dimmer, min_visible
 import wifisettings
 import httpclient
 import reqguard
+from captiveportal import CaptiveDNS
 from linkwatch import LinkWatch, UP as LINK_UP
 
 displayio.release_displays()
@@ -204,6 +205,18 @@ if not ap_mode:
 pool = socketpool.SocketPool(wifi.radio)
 _ntp = None
 
+# AP mode only (issue #21): answer every DNS query with our own IP so a
+# joining phone/laptop's captive-portal detection probes resolve to us
+# instead of timing out (there's no internet to resolve anything for real),
+# which is what makes the OS auto-pop its sign-in browser -- see the
+# CAPTIVE_CHECK_PATHS routes below for the HTTP side of that handshake.
+captive_dns = None
+if ap_mode:
+    try:
+        captive_dns = CaptiveDNS(pool, host)
+    except Exception as e:
+        print("captiveportal: DNS start failed", e)  # setup still reachable at the AP's own IP
+
 
 def sync_clock():
     """NTP -> RTC (UTC). Marks the clock trusted for lib/schedule.py on success."""
@@ -358,6 +371,25 @@ def post_wifi(request: Request):
     return _json(request, {"ok": True, "ssid": ssid, "rebooting": True})
 
 
+# AP mode only (issue #21): known captive-portal detection probe paths.
+# Each OS expects a specific exact response (Android: 204 + empty body,
+# Apple: 200 + one exact HTML string, Windows: specific plain-text bodies)
+# and treats *anything else* as "there's a portal" -- so redirecting these
+# to the setup page, rather than trying to impersonate the expected body, is
+# what makes the OS auto-launch its captive sign-in browser here instead of
+# just flagging "limited connectivity" and leaving the user to find the IP.
+CAPTIVE_CHECK_PATHS = (
+    "/generate_204", "/gen_204",                            # Android
+    "/hotspot-detect.html", "/library/test/success.html",   # Apple
+    "/connecttest.txt", "/ncsi.txt", "/redirect",           # Windows
+    "/success.txt",                                          # Firefox
+)
+
+
+def captive_redirect(request: Request):
+    return Redirect(request, "http://%s/" % host)
+
+
 def start_http():
     """Start the web UI on port 80. Returns the Server, or None on any failure.
 
@@ -370,6 +402,9 @@ def start_http():
         srv.route("/api/prefs", POST)(post_prefs)
         srv.route("/api/status", GET)(get_status)
         srv.route("/api/wifi", POST)(post_wifi)
+        if ap_mode:
+            for p in CAPTIVE_CHECK_PATHS:
+                srv.route(p, GET)(captive_redirect)
         srv.start(host, 80)  # station IP, or 192.168.4.1 in AP mode
     except Exception as e:
         print("http start failed", e)
@@ -474,6 +509,8 @@ while True:
     online = link is not None and link.state == LINK_UP
 
     if ap_mode:
+        if captive_dns is not None:
+            captive_dns.poll()
         # Configured network down (router rebooting, outage)? Retry it by
         # rebooting once nobody has used the setup UI for AP_IDLE_RETRY_S.
         # With no SSID configured, stay in setup mode indefinitely.

@@ -35,6 +35,10 @@ class World:
         self.resets = []
         self.connects = []
         self.join_ip = None
+        self.dns_queries = []    # [(bytes, addr)] fed to the next recvfrom_into
+        self.dns_sent = []       # [(bytes, addr)] captured from CaptiveDNS.sendto
+        self.dns_socket = None   # the most recently created fake UDP socket
+        self.routes = []         # [(path, method)] registered via Server.route
 
 
 W = World()
@@ -106,7 +110,43 @@ def fake_modules():
 
     W.radio = Radio()
     mod("wifi", radio=W.radio)
-    mod("socketpool", SocketPool=lambda radio: object())
+
+    class FakeUDPSocket:
+        def __init__(self):
+            self.blocking = True
+            self.bound = None
+            self.sent = []       # [(bytes, addr)]
+
+        def setblocking(self, flag):
+            self.blocking = flag
+
+        def bind(self, addr):
+            self.bound = addr
+
+        def recvfrom_into(self, buf):
+            if not W.dns_queries:
+                raise OSError("no data")
+            data, addr = W.dns_queries.pop(0)
+            buf[:len(data)] = data
+            return len(data), addr
+
+        def sendto(self, data, addr):
+            self.sent.append((data, addr))
+            W.dns_sent.append((data, addr))
+
+    class FakePool:
+        AF_INET = 0
+        SOCK_DGRAM = 1
+
+        def __init__(self, radio):
+            pass
+
+        def socket(self, family, type_):
+            sock = FakeUDPSocket()
+            W.dns_socket = sock
+            return sock
+
+    mod("socketpool", SocketPool=FakePool)
 
     class RTC:
         datetime = None
@@ -128,6 +168,7 @@ def fake_modules():
             self.stopped = True
 
         def route(self, path, method):
+            W.routes.append((path, method))
             return lambda f: f
 
         def start(self, host, port):
@@ -143,8 +184,12 @@ def fake_modules():
                 raise OSError(9, "EBADF")
             return "no_request"
 
+    class Redirect:
+        def __init__(self, request, url, **kw):
+            self.url = url
+
     mod("adafruit_httpserver", Server=Server, Request=object, Response=object,
-        Status=lambda *a: a, GET="GET", POST="POST")
+        Status=lambda *a: a, GET="GET", POST="POST", Redirect=Redirect)
     return m
 
 

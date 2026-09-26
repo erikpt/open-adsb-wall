@@ -32,8 +32,9 @@ Two physical units will exist (owner + friend). Each unit owns its own lat/lon a
 | Controller | Adafruit MatrixPortal S3 (ESP32-S3, USB-C, HUB75, Wi-Fi) |
 | Panel | P2-1515, 128×64, 256×128 mm, 1/32 scan, HUB75 |
 | Panel power | External 5.0 V bench/PSU, **direct to the panel's own power input**, ~3 A measured full white (~15 W), budget 4–5 A |
-| S3 power | USB-C only (board + logic). Do not back-feed USB from panel 5 V |
+| S3 power | USB-C only (board + logic) — its screw terminals are output-only, never a power input (see footgun below). Can share the panel's PSU via a second USB-C feed; do not wire the panel 5 V onto the S3's screw terminals |
 | Wiring | HUB75 data from S3; panel 5 V/GND from PSU **wired to the panel itself**; common ground optional if noise appears |
+| S3 power cable | Bare-wire-to-USB-C pigtail (5V, 3–5 A), spliced onto the same PSU as the panel rather than a second USB-C brick (see footgun note below) |
 
 Firmware must never assume USB can power the LEDs.
 
@@ -46,6 +47,18 @@ entirely dependent on USB, and unplugging USB-C kills it even though a beefy ext
 supply is nominally connected. There is no actual backfeed in this case -- the panel
 simply never had independent power. Always verify the PSU leads land on the panel's own
 power pads/terminal, never the MatrixPortal's screw lugs.
+
+**Powering both from one supply.** The S3's screw terminals being output-only doesn't
+mean the board must run off a separate USB-C wall charger -- it means the board has to
+be fed through its USB-C port specifically, same as always, just sourced from the same
+PSU as the panel instead of a second brick. Land the PSU's 5V/GND leads on a small
+junction (splice or terminal block) with two branches out of it: one straight to the
+panel's own power input (as above, carries the bulk of the current), and one through a
+**bare-wire-to-USB-C pigtail cable** into the MatrixPortal's USB-C port. That pigtail is
+passive -- two wires to VBUS/GND, no PD negotiation -- so it presents the same fixed 5V
+the board would see from any USB-C charger. Size the PSU for the panel's worst-case draw
+plus the board's (well under 1A even with Wi-Fi active); the panel dominates the budget
+either way. See the table above for a specific cable.
 
 ## 4. Architecture
 
@@ -224,6 +237,41 @@ If `CIRCUITPY_WIFI_SSID` is empty, or joining it fails (two 10 s
 
 Hold BOOT 5 s to clear Wi-Fi settings is a stretch goal.
 
+**Captive-portal auto-pop (issue #21).** A plain setup AP with no DNS/HTTP
+tricks leaves a joining phone/laptop's own network stack unable to tell
+there's anything to sign in to -- its captive-portal detection probes just
+time out (AP mode has no internet to resolve or reach anything real), so the
+OS never auto-launches a sign-in browser and the user has to already know to
+browse to `192.168.4.1`. Two pieces make that auto-pop instead, both AP-mode
+only:
+
+- **DNS hijack** (`lib/captiveportal.py`, `CaptiveDNS`): a UDP responder
+  bound to `:53` on the AP-mode `socketpool.SocketPool`, polled once per main
+  loop tick (`captive_dns.poll()`, non-blocking). It answers every class-IN
+  A or ANY query with the AP's own IPv4 address, and every other query type
+  (AAAA, HTTPS/SVCB, ...) with a NOERROR/no-answer reply so the resolver
+  falls through to an A query instead of stalling. It is not a general
+  resolver -- there's nothing upstream to forward anything to -- and drops
+  anything malformed or multi-question rather than guess at it. This is what
+  makes the OS's captive-portal probe hostnames (e.g. Apple's
+  `captive.apple.com`) resolve to this device at all.
+- **HTTP redirects for the known OS probe paths** (`code.py`,
+  `CAPTIVE_CHECK_PATHS` / `captive_redirect`): Android (`/generate_204`,
+  `/gen_204`), Apple (`/hotspot-detect.html`,
+  `/library/test/success.html`), Windows (`/connecttest.txt`, `/ncsi.txt`,
+  `/redirect`), and Firefox (`/success.txt`), registered only
+  `if ap_mode`. Each OS actually expects one specific "you have real
+  internet" response (Android: bare 204; Apple: one exact HTML string;
+  Windows: specific plain-text bodies) and treats *anything else* as "there's
+  a portal here" -- so a redirect to `http://<host>/` is enough to trigger
+  that path; trying to instead mimic each OS's exact expected success body
+  would be more code for the same result and would have to be kept in sync
+  with OS behavior that can change.
+
+Together: DNS hijack gets the probe request to this device; the redirect
+response is what makes the OS conclude a portal is present and open its
+sign-in browser to it.
+
 ### Wi-Fi drop recovery (station mode)
 
 Once joined as a station, `lib/linkwatch.py:LinkWatch` (`code.py`, station mode
@@ -351,15 +399,99 @@ each way.
 
 ### Badges (was `GET /v1/logo/{id}`)
 
-Superseded (issue #2): airline badges are no longer fetched from the cloud.
-`tools/gen_badges.py` (host-only, stdlib-only, Pillow-free generator) bakes 50
-24×24, 4-bit indexed BMP tiles into `lib/logos/<key>.bmp` at build time, one per
-`lib/enrich.py:AIRLINES` entry plus a generic fallback (`_unk.bmp`). All 50
-badges together are 17,700 bytes (354 bytes each); on the board's 512-byte
-FAT clusters that's ~25 KB, comfortably inside the 8 MB flash. Only one badge
-is loaded into RAM at a time (~288 bytes). `lib/enrich.py:badge_path()` maps a
-lookup to its file path; `lib/card.py` loads it with `adafruit_imageload.load()`
-or `displayio.OnDiskBitmap()`. No PNG, no network round-trip, no server.
+Superseded (issue #2): airline badges are no longer fetched from the cloud;
+everything below is baked into `lib/logos/<key>.bmp` at build time, one file
+per `lib/enrich.py:AIRLINES` entry plus a generic fallback (`_unk.bmp`), all
+4-bit indexed BMP (`adafruit_imageload.load()` / `displayio.OnDiskBitmap()`,
+one badge in RAM at a time). No PNG, no network round-trip, no server.
+
+Two build tools produce `lib/logos/`, and both can coexist:
+
+- `tools/gen_badges.py` (host-only, stdlib-only, Pillow-free): draws
+  non-trademarked 24×24 letter-mark badges (IATA/ICAO code, hand-drawn 3×5
+  font, 3-color palette — index 0 black, 1 tile background, 2 mark color;
+  354 bytes each). This is every airline's badge by default and remains the
+  fallback for any airline the next tool hasn't covered.
+- `tools/convert_logos.py` (host-only, needs Pillow + cairosvg for SVG
+  sources — issue #18): converts a real sourced logo image
+  (`tools/logo_sources/<key>.{svg,png,...}`) into the same BMP container,
+  fit to its own aspect ratio (longest side ≤ 48 px, the sec. 9 slot budget,
+  not forced square), with an 8-color palette lerped from black (index 0) to
+  that airline's existing `AIRLINES` accent color (index 7) instead of the
+  source's own brand color — several official brand hex values (UPS's,
+  Lufthansa's) are near-black and unreadable against the panel's black
+  background, while `AIRLINES`'s colors were already picked to be legible
+  there. The extra palette steps (vs. the letter-mark's 3) are what keep a
+  logo's thin strokes and antialiasing from collapsing into a blob at this
+  size; `lib/dim.py`'s `scale_palette()` rescales a palette of any length the
+  same way, so night-mode dimming needs no changes for either badge type.
+
+Priority is automatic and needs no runtime code: `lib/enrich.py:badge_path()`
+is a direct `lib/logos/<key>.bmp` path lookup with no separate resolution
+step, so whichever tool last wrote that file is what loads. The two tools
+stay consistent via `tools/logo_sources/sources.json`, a manifest
+`{icao: source_filename}` that `convert_logos.py` writes and `gen_badges.py`
+reads (`real_logo_keys()`) so that re-running `gen_badges.py` alone never
+overwrites or prunes a real logo — it just skips those keys. Re-running
+`convert_logos.py` (`--dir tools/logo_sources`) after `gen_badges.py` is what
+actually re-asserts a real logo's priority if a key's letter-mark badge was
+ever regenerated in between.
+
+As of this writing, 49 of the 49 `AIRLINES` entries have a real logo. The
+first 15 (issue #18, initial pass: American, Delta, United, Southwest,
+JetBlue, FedEx, UPS, Air Canada, British Airways, Lufthansa, KLM, Air France,
+Emirates, Qatar Airways, Turkish) came from Simple Icons (CC0-licensed
+simplified brand marks, `cdn.jsdelivr.net/npm/simple-icons`) and go through
+`convert_logos.py`'s silhouette mode (single-color glyph, tinted to the
+`AIRLINES` accent). The remaining 34 (Alaska, Spirit, Frontier, Allegiant,
+Hawaiian, Sun Country, Avelo, Breeze, SkyWest, Envoy, Republic, Endeavor,
+PSA, Mesa, Horizon, Piedmont, GoJet, Air Wisconsin, CommutAir, Cape Air,
+Atlas Air, ABX Air, ATI, Kalitta, Polar Air Cargo, Amerijet, Omni Air Intl,
+National, NetJets, Flexjet, WestJet, Aeromexico, Viva Aerobus, Volaris) came
+from `img.logo.dev/<domain>?format=png` (a per-carrier domain lookup, using
+logo.dev's publishable demo token documented on their own site — no account
+of ours) and go through the *photo* mode instead: these are raster marks
+that carry their own real brand colors, so (unlike the silhouette batch)
+they keep the source's colors rather than the `AIRLINES` accent tint. This
+is the first real exercise of `convert_photo()`; its docstring's "no such
+source is committed yet" is now stale. Every domain was verified to actually
+resolve to that airline's own site (or logo.dev's cached asset for it)
+before use — three of the issue's guessed domains turned out wrong or dead
+and were swapped for the real one: Omni Air International's actual site is
+`oai.aero`, not `omniairintl.com` (parked/IIS-default); National Airlines
+(N8/NCR)'s is `nationalairlines.com`, not `nationalair.com` (a same-named,
+unrelated business); ATI/Air Transport International (8C/ATN)'s is
+`airtransport.cc`, not `atiacmi.com` (unreachable) or the `atiaviation.com`
+near-miss (a different, unrelated "ATI Aviation Services"). Horizon Air's
+`horizonair.com` legitimately resolves to the same Alaska Airlines "Eskimo"
+mark Alaska itself uses — Horizon retired its independent brand in 2011 and
+now flies co-branded as "Alaska Horizon" — so reusing that art for `qxe` is
+correct, not a scraping error. All 49 files together are a little over 50 KB;
+on the board's 512-byte FAT clusters that's comfortably inside the 8 MB
+flash.
+
+Sources tried that did *not* pan out, for the next carrier that needs one:
+Simple Icons only covers the first 15 (it's a general tech/consumer brand
+set, not an airline-specific one — none of the remaining 34 appear in it);
+`github.com/gilbarbara/logos` is the same kind of tech-brand set and has no
+airline matches either; `worldvectorlogo.com` 403s every page (search and
+logo, several query shapes tried, several browser user-agents) behind a
+Cloudflare bot challenge; `svgrepo.com` 403s behind a Vercel bot checkpoint;
+`cdn.brandfetch.io/<domain>` now 302-redirects to a "client ID required"
+notice — the old unauthenticated quick-logo trick is dead; `img.logo.dev`
+*without* a token 401s, but `?token=<their published demo token>&format=png`
+works well and was this batch's actual source.
+
+**Licensing**: this is the project owner's personal, non-commercial build
+(issue #18). The owner has explicitly decided not to pursue trademark
+clearance for shipping real airline logos on it, overriding sec. 2's
+original "no airline trademark artwork" non-goal for this reason alone —
+that is a stated project decision, not legal advice, and not something this
+repo attempts to justify further. The letter-mark generator is kept
+specifically so any fork or reuse that does care about that can drop back to
+it (delete `tools/logo_sources/sources.json`, or the individual keys in it,
+and re-run `tools/gen_badges.py`) without losing badge coverage for any
+airline.
 
 ### Rate limits
 
@@ -390,6 +522,7 @@ need no cache: they are static files already on the drive.
 | `code.py` | matrix, Wi-Fi join / setup-AP fallback, station reconnect watchdog, web UI server (auto-restart), NTP, dimmer schedule; poll_card() is still a placeholder until lib/net.py | exists (poll path placeholder) |
 | `lib/linkwatch.py` | station Wi-Fi drop detection, bounded reconnect (6 tries, ~4 min), then hard reset into setup AP | exists |
 | `lib/httpclient.py` | shared adafruit_requests Session, 4 s timeout, 8 s/32 KB body cap, always-close get_json() for lib/net.py | exists |
+| `lib/captiveportal.py` | AP-mode captive-portal DNS responder (issue #21; §7 AP mode) | exists |
 | `lib/card.py` | render 128×64 card | **to build** |
 | `lib/net.py` | HTTPS GET nearby (must pass `extended=1`; §8) | **to build** |
 
@@ -408,15 +541,19 @@ Layout (pixel budget):
 ```
 
 - Badge: local `lib/logos/<key>.bmp`, loaded via `adafruit_imageload.load()`
-  or `displayio.OnDiskBitmap()` (§8, issue #2). The current set
-  (`tools/gen_badges.py`) generates non-trademarked 24×24 letter-mark badges;
-  the layout actually has room for up to **48×48**. Issue #18 tracks sourcing
-  real carrier logos at that size, with the generated letter-mark badge kept
-  as a per-airline/build fallback (not a wholesale replacement) given the
-  licensing considerations of shipping real logos. Register one badge palette
-  in `lib/dim.py` and overwrite its colours on each hero swap
-  (`Dimmer.add_palette` only ever adds, so swapping badges by adding a fresh
-  palette every poll would leak memory)
+  or `displayio.OnDiskBitmap()` (§8, issue #2). Up to **48×48**: a real
+  sourced carrier logo (`tools/convert_logos.py`, issue #18) where one exists
+  (49/49 `AIRLINES` entries, as of this writing), else a generated 24×24
+  letter-mark (`tools/gen_badges.py`) — still the fallback for the generic
+  `_unk` badge and for any airline added to `AIRLINES` before a real logo is
+  sourced for it. See §8 Badges for the licensing note and how the two
+  coexist. Register
+  one badge palette in `lib/dim.py` and overwrite its colours on each hero
+  swap (`Dimmer.add_palette` only ever adds, so swapping badges by adding a
+  fresh palette every poll would leak memory) — note a real logo's palette
+  is longer (8 entries) than a letter-mark's (3), so this still-to-build
+  wiring needs to size that registered palette to the badge actually loaded
+  (e.g. re-registering per swap) rather than assume a fixed length
 - Font: `terminalio.FONT` or a bundled 5×7 / 6×12 bitmap font
 - Colors: white text, dim gray labels, badge as-is
 - Sleep: empty group / brightness 0
@@ -521,6 +658,8 @@ clock: they check control flow and serial output, not the panel or the radio.
 | `code.py`: in a sleep window the panel level is 0.0 and no ADS-B poll runs; awake, the poll's bbox comes from the saved pin (§6, §9 Poll loop) | `tests/test_code_schedule.py` |
 | `code.py` setup AP: no SSID → WPA2 `TailWatch-XXXX`, 8-char password from the 32-symbol alphabet, fresh each boot, printed once, quietest of channels 1/6/11, UI on 192.168.4.1, no NTP, stays up indefinitely; SSID configured but unreachable → two join attempts, AP, reboot after `AP_IDLE_RETRY_S` idle (§7 AP mode) | `tests/test_code_apmode.py` |
 | `settings.toml` Wi-Fi writer: validation, form parsing, TOML escaping, other keys kept, crash-safe swap + `recover()` (§7 AP mode) | `tests/test_wifisettings.py` |
+| `CaptiveDNS._build`: A/ANY query answered with the AP's IP, AAAA gets NOERROR/no-answer, malformed packets dropped, transaction ID echoed (§7 AP mode, issue #21) | `tests/test_captiveportal.py` |
+| `code.py` AP mode: a DNS query fed to the poll loop gets answered with the AP's own IP; captive-check HTTP routes (`/generate_204`, `/hotspot-detect.html`, ...) registered only in AP mode (§7 AP mode, issue #21) | `tests/test_code_apmode.py` |
 | LinkWatch: grace period, 6 bounded reconnects then give-up, self-recovery, IP change while up, radio errors count as down, password never printed (§7 Wi-Fi drop recovery) | `tests/test_linkwatch.py` |
 | `code.py` link handling: drop + rejoin on a new IP moves the UI server; gives up → hard reset; 5 consecutive `server.poll()` errors restart the server; no `server.poll()` while down (§7 Wi-Fi drop recovery) | `tests/test_code_linkwatch.py` |
 | Outbound HTTP: one Session reused, timeout passed, response always closed, non-200 + `Retry-After`, mid-body error, 8 s / 32 KB caps (§9 Poll loop) | `tests/test_httpclient.py` |
@@ -580,14 +719,18 @@ lib/dim.py
 lib/hero.py
 lib/enrich.py        # new (issue #2: on-device airline lookup)
 lib/filters.py       # new (issue #2: on-device heli/mil/ga filters)
-lib/logos/*.bmp       # new, generated (issue #2: on-device badges, not fetched)
+lib/logos/*.bmp       # new, generated (issue #2: on-device badges, not fetched;
+                       #   issue #18: real logo where sourced, else letter-mark)
 lib/card.py          # new
 lib/net.py           # new
 lib/wifisettings.py  # new (issue #11: AP-mode settings.toml Wi-Fi writer)
 lib/setupscreen.py   # new (issue #11: panel setup-AP credentials screen)
 lib/linkwatch.py     # new (station Wi-Fi drop detection + bounded reconnect)
 lib/httpclient.py    # new (shared, always-closing adafruit_requests client for lib/net.py)
-tools/gen_badges.py  # new, host-only (generates lib/logos/*.bmp)
+lib/captiveportal.py # new (issue #21: AP-mode captive-portal DNS responder)
+tools/gen_badges.py     # new, host-only (generates lib/logos/*.bmp letter-marks)
+tools/convert_logos.py  # new, host-only (issue #18: real logos -> lib/logos/*.bmp)
+tools/logo_sources/     # new (issue #18: sourced logo images + sources.json manifest)
 tests/test_enrich_filters.py    # host-only
 tests/test_hero.py              # host-only
 tests/test_prefs.py             # host-only (prefs round trip, .bak, clamps, merge rules)
@@ -603,7 +746,8 @@ tests/test_linkwatch.py         # host-only
 tests/test_httpclient.py        # host-only
 tests/test_code_linkwatch.py    # host-only (runs code.py with fake CircuitPython modules)
 tests/test_code_schedule.py     # host-only (code.py sim: sleep skips poll, bbox from prefs)
-tests/test_code_apmode.py       # host-only (code.py sim: setup-AP fallback)
+tests/test_code_apmode.py       # host-only (code.py sim: setup-AP fallback, captive DNS + redirects)
+tests/test_captiveportal.py     # host-only (issue #21: CaptiveDNS._build wire format)
 lib/reqguard.py      # new (issue #14: same-origin/CSRF guard)
 DESIGN.md            # this file
 README.md
