@@ -7,6 +7,7 @@
 <meta name="description" content="TailWatch is an open-source, on-device wall display that shows one live nearby aircraft at a time. No cloud, no subscription, no app.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
+<script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
 </head>
 <body>
 
@@ -167,8 +168,19 @@
     <div class="wrap">
       <h2>3D-printable enclosure</h2>
       <p class="section-lede">Designed from the real controller and panel dimensions &mdash; six parts, no supports needed, every part fits a 200&times;200mm print bed.</p>
+      <model-viewer
+        class="model-viewer-3d"
+        src="tailwatch_enclosure.glb"
+        alt="Interactive 3D model of the TailWatch enclosure, assembled"
+        camera-controls
+        auto-rotate
+        auto-rotate-delay="1500"
+        shadow-intensity="1"
+        exposure="1"
+        camera-orbit="35deg 70deg 105%"
+      ></model-viewer>
+      <p class="model-hint">Drag to rotate &middot; scroll or pinch to zoom</p>
       <div class="gallery">
-        <img class="gallery-main" src="images/assembly_front.png" alt="TailWatch enclosure, assembled front view" loading="lazy">
         <div class="gallery-grid">
           <img src="images/assembly_back.png" alt="TailWatch enclosure, back view showing the mounting straps and wall-hanging keyhole slots" loading="lazy">
           <img src="images/assembly_exploded.png" alt="TailWatch enclosure, exploded view of all six printed parts" loading="lazy">
