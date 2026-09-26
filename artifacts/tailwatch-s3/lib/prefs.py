@@ -19,7 +19,8 @@ DEFAULTS = {
     "sleep_enabled": True,
     "sleep_start": "23:00",
     "sleep_end": "06:30",
-    "timezone": "America/Chicago",
+    "tz_offset_min": -360,  # standard-time UTC offset, minutes (east +); -360 = US Central
+    "us_dst": True,         # auto-apply fixed US DST rule (lib/tz.py); not a tz database
     "api": "https://api.example.com",
     "token": "",
 }
@@ -29,6 +30,7 @@ _BOOLS = {
     "hide_ga",
     "hide_mil",
     "sleep_enabled",
+    "us_dst",
 }
 _FLOATS = {
     "lat",
@@ -37,6 +39,7 @@ _FLOATS = {
     "brightness_day",
     "brightness_night",
     "brightness_max",
+    "tz_offset_min",
 }
 
 
@@ -48,6 +51,12 @@ def _clamp(p):
         p["brightness_day"] = p["brightness_max"]
     if p["brightness_night"] > p["brightness_max"]:
         p["brightness_night"] = p["brightness_max"]
+    try:
+        off = int(round(float(p["tz_offset_min"])))
+    except (ValueError, TypeError):
+        off = DEFAULTS["tz_offset_min"]
+    p["tz_offset_min"] = max(-720, min(840, off))  # UTC-12:00 .. UTC+14:00
+    p.pop("timezone", None)  # legacy IANA string: unresolvable on-device, drop it
     if p["night_mode"] not in ("off", "fixed", "sunset"):
         p["night_mode"] = "sunset"
     return p

@@ -1,4 +1,4 @@
-import time
+from tz import local_minutes
 from sun import is_after_sunset
 
 
@@ -10,9 +10,11 @@ def _hm(s):
         return 0
 
 
-def _now_minutes():
-    t = time.localtime()
-    return t.tm_hour * 60 + t.tm_min
+def _now_minutes(prefs):
+    # Local wall-clock minutes for sleep/fixed-night windows. The offset is
+    # applied ONLY here: the RTC stays UTC and sun.py needs UTC. Fixed US DST
+    # rule only, not a tz database -- see lib/tz.py.
+    return local_minutes(prefs.get("tz_offset_min", 0), prefs.get("us_dst", False))
 
 
 def _in_window(now_m, start_s, end_s):
@@ -28,7 +30,7 @@ def _in_window(now_m, start_s, end_s):
 def sleeping(prefs):
     if not prefs.get("sleep_enabled"):
         return False
-    return _in_window(_now_minutes(), prefs["sleep_start"], prefs["sleep_end"])
+    return _in_window(_now_minutes(prefs), prefs["sleep_start"], prefs["sleep_end"])
 
 
 def night(prefs):
@@ -36,7 +38,7 @@ def night(prefs):
     if mode == "off":
         return False
     if mode == "fixed":
-        return _in_window(_now_minutes(), prefs["night_start"], prefs["night_end"])
+        return _in_window(_now_minutes(prefs), prefs["night_start"], prefs["night_end"])
     return is_after_sunset(prefs["lat"], prefs["lon"])
 
 
