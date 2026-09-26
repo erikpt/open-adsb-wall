@@ -1,0 +1,14 @@
+ECHO: "frame_back_z = 34.5 mm (total frame depth 35.5 mm)"
+Geometries in cache: 4
+Geometry cache size in bytes: 4952
+CGAL Polyhedrons in cache: 1
+CGAL cache size in bytes: 33344
+Total rendering time: 0:00:00.004
+   Top level object is a 3D object:
+   Simple:        yes
+   Vertices:       24
+   Halfedges:      72
+   Edges:          36
+   Halffacets:     32
+   Facets:         16
+   Volumes:         3

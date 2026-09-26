@@ -1,0 +1,8 @@
+ECHO: "frame_back_z = 34.5 mm (total frame depth 35.5 mm)"
+Compiling design (CSG Products normalization)...
+Normalized CSG tree has 205 elements
+Geometries in cache: 126
+Geometry cache size in bytes: 750336
+CGAL Polyhedrons in cache: 8
+CGAL cache size in bytes: 825856
+Total rendering time: 0:00:00.602

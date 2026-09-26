@@ -1,0 +1,16 @@
+# CircuitPython / Python build artifacts
+**/__pycache__/
+*.pyc
+
+# TailWatch S3 device secrets and local state (real values; only the
+# .example files are meant to be tracked)
+artifacts/tailwatch-s3/prefs.json
+artifacts/tailwatch-s3/prefs.bak
+artifacts/tailwatch-s3/settings.toml
+artifacts/tailwatch-s3/settings.toml.bak
+artifacts/tailwatch-s3/settings.toml.new
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*~

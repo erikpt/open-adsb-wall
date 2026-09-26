@@ -1,6 +1,6 @@
 {
-  "lat": 30.2094,
-  "lon": -95.7508,
+  "lat": 30.0000,
+  "lon": -95.0000,
   "nm": 10,
   "hide_heli": true,
   "hide_ga": false,
@@ -14,7 +14,8 @@
   "sleep_enabled": true,
   "sleep_start": "23:00",
   "sleep_end": "06:30",
-  "timezone": "America/Chicago",
+  "tz_offset_min": -360,
+  "us_dst": true,
   "api": "https://api.example.com",
   "token": ""
 }
