@@ -31,11 +31,21 @@ Two physical units will exist (owner + friend). Each unit owns its own lat/lon a
 |---|---|
 | Controller | Adafruit MatrixPortal S3 (ESP32-S3, USB-C, HUB75, Wi-Fi) |
 | Panel | P2-1515, 128×64, 256×128 mm, 1/32 scan, HUB75 |
-| Panel power | External 5.0 V bench/PSU, **direct to panel**, ~3 A measured full white (~15 W), budget 4–5 A |
+| Panel power | External 5.0 V bench/PSU, **direct to the panel's own power input**, ~3 A measured full white (~15 W), budget 4–5 A |
 | S3 power | USB-C only (board + logic). Do not back-feed USB from panel 5 V |
-| Wiring | HUB75 data from S3; panel 5 V/GND from PSU; common ground optional if noise appears |
+| Wiring | HUB75 data from S3; panel 5 V/GND from PSU **wired to the panel itself**; common ground optional if noise appears |
 
 Firmware must never assume USB can power the LEDs.
+
+**Known footgun (confirmed on hardware):** the MatrixPortal S3 has its own 5V/GND screw
+terminals next to the HUB75 connector -- these are **output only**, wired straight to the
+board's USB-C 5V rail, and exist so the board can drive a *small* panel with no external
+supply at all. Landing the external PSU's barrel-to-terminal adapter on *those* terminals
+instead of the *panel's own* power input looks correct but isn't: the panel ends up
+entirely dependent on USB, and unplugging USB-C kills it even though a beefy external
+supply is nominally connected. There is no actual backfeed in this case -- the panel
+simply never had independent power. Always verify the PSU leads land on the panel's own
+power pads/terminal, never the MatrixPortal's screw lugs.
 
 ## 4. Architecture
 
