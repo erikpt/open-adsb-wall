@@ -3,7 +3,7 @@
 Status: implementable MVP  
 Hardware target: Adafruit MatrixPortal S3 + indoor P2 SMD1515 128×64 HUB75 panel  
 Companion: none -- the device calls OpenSky directly and assembles cards on-device (see issue #2; no cloud API)  
-Existing starter: `artifacts/tailwatch-s3/` (`code.py`, `lib/*`, `www/index.html`, `prefs.example.json`)
+Existing starter: `firmware/` (`code.py`, `lib/*`, `www/index.html`, `prefs.example.json`)
 
 This document is the spec. Do not invent product scope beyond it. Prefer small, working slices over frameworks.
 
@@ -491,7 +491,7 @@ Do not start a rewrite in ESP-IDF unless CircuitPython HTTPS + HTTP server canno
 ## 13. Acceptance tests
 
 Host-side tests are plain Python 3 (stdlib only, no pytest) and are not copied
-to CIRCUITPY. Run them all from `artifacts/tailwatch-s3/`:
+to CIRCUITPY. Run them all from `firmware/`:
 
 ```
 for f in tests/test_*.py; do python3 "$f" || exit 1; done
@@ -560,7 +560,7 @@ Add a host test for each item when its code lands, not before.
 
 ## 14. Repo / files
 
-Keep under `artifacts/tailwatch-s3/` unless the agent is given another root.
+Keep under `firmware/` unless the agent is given another root.
 
 ```
 code.py
@@ -603,8 +603,6 @@ lib/reqguard.py      # new (issue #14: same-origin/CSRF guard)
 DESIGN.md            # this file
 README.md
 ```
-
-Cloud worker may live in `artifacts/tailwatch-api/` when started.
 
 ## 15. Coding rules for the agent
 
