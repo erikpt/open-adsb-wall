@@ -480,15 +480,73 @@ Do not start a rewrite in ESP-IDF unless CircuitPython HTTPS + HTTP server canno
 
 ## 13. Acceptance tests
 
-- Full-white bench test previously ~15 W @ 5 V; firmware must not change power wiring
-- Save lat/lon from phone on same LAN; reboot; values persist
-- 10 mi box print/serial matches formula in §6
-- Sleep window: panel dark, no nearby requests
-- After sunset (or forced `night_mode=fixed`): brightness equals night slider, ≤ max
-- Two tokens cannot read each other’s saved device prefs (none stored as owner data in MVP)
-- Invalid API: panel shows `NO LINK`, settings page still loads
-- Empty bbox: `NO TRAFFIC`, not a crash
-- Friend can set a different pin without firmware fork
+Host-side tests are plain Python 3 (stdlib only, no pytest) and are not copied
+to CIRCUITPY. Run them all from `artifacts/tailwatch-s3/`:
+
+```
+for f in tests/test_*.py; do python3 "$f" || exit 1; done
+```
+
+`tests/test_code_*.py` run the real `code.py` under fake CircuitPython modules
+(`board`, `wifi`, `displayio`, `adafruit_httpserver`, ...) with a simulated
+clock: they check control flow and serial output, not the panel or the radio.
+
+### 13.1 Automated (host-side)
+
+| Behavior (spec §) | Test |
+|---|---|
+| Pin (lat/lon/nm) saved from the web form survives a fresh `load()` (the reboot); a second unit sets a different pin through the same code path, no firmware fork (§5, §6) | `tests/test_prefs.py` |
+| `/prefs.bak` written on save and used when `/prefs.json` is corrupt; clamps: `nm` 1–50, brightness 0–1 and ≤ `brightness_max`, `tz_offset_min` −720..840, unknown `night_mode` → `sunset`, legacy `timezone` dropped; lat/lon/HH:MM fields validated with a default fallback (§6, issue #15) | `tests/test_prefs.py`, `tests/test_prefs_validation.py` |
+| Form POST: missing checkbox = `false`; JSON POST: partial merge, booleans as-is, unparseable numbers / unknown keys ignored; write-only `token` merge rules (§6, issue #14) | `tests/test_prefs.py`, `tests/test_prefs_token.py` |
+| Bbox matches the §6 formula (10 mi at 30N 95W; 5 mi friend pin); existing cos(lat) floor of 0.2 above ~78.5° | `tests/test_bbox.py` |
+| Sleep window → brightness 0 (wraps midnight, end exclusive, start == end means off, CST and CDT) (§6 Schedule) | `tests/test_schedule.py` |
+| Fixed night hours or after local sunset → night slider, capped by `brightness_max`; `night_mode=off` → day level; fixed US DST rule boundaries (§6 Schedule) | `tests/test_schedule.py` |
+| Clock-trust gate: default-epoch RTC never blanks or night-dims; NTP-synced or ≥ 2024 RTC applies the schedule (§6, issue #11) | `tests/test_schedule_clock.py` |
+| Dimmer: level 0 → blank group + `display.brightness = 0.0`; wake restores the awake group at 1.0; palettes rescaled from base colours (no compounding) with the min-visible floor (§6) | `tests/test_dim.py` |
+| `code.py`: in a sleep window the panel level is 0.0 and no ADS-B poll runs; awake, the poll's bbox comes from the saved pin (§6, §9 Poll loop) | `tests/test_code_schedule.py` |
+| `code.py` setup AP: no SSID → WPA2 `TailWatch-XXXX`, 8-char password from the 32-symbol alphabet, fresh each boot, printed once, quietest of channels 1/6/11, UI on 192.168.4.1, no NTP, stays up indefinitely; SSID configured but unreachable → two join attempts, AP, reboot after `AP_IDLE_RETRY_S` idle (§7 AP mode) | `tests/test_code_apmode.py` |
+| `settings.toml` Wi-Fi writer: validation, form parsing, TOML escaping, other keys kept, crash-safe swap + `recover()` (§7 AP mode) | `tests/test_wifisettings.py` |
+| LinkWatch: grace period, 6 bounded reconnects then give-up, self-recovery, IP change while up, radio errors count as down, password never printed (§7 Wi-Fi drop recovery) | `tests/test_linkwatch.py` |
+| `code.py` link handling: drop + rejoin on a new IP moves the UI server; gives up → hard reset; 5 consecutive `server.poll()` errors restart the server; no `server.poll()` while down (§7 Wi-Fi drop recovery) | `tests/test_code_linkwatch.py` |
+| Outbound HTTP: one Session reused, timeout passed, response always closed, non-200 + `Retry-After`, mid-body error, 8 s / 32 KB caps (§9 Poll loop) | `tests/test_httpclient.py` |
+| Hero: candidate parsing (ground / no-position / malformed skipped; `states: null` → no candidates), closest + tie-break, hysteresis rules (a)(b)(c), no flapping, `Hero.expired()` (§8) | `tests/test_hero.py` |
+| Filters heli / mil / GA and `apply()` on hero candidates; airline prefix lookup; badges committed, current, and decodable (§8 Badges, §10) | `tests/test_enrich_filters.py` |
+| Local-UI same-origin guard: Host must match the device's address on every `/api/*` route; POSTs also require a same-origin Origin/Referer, else 403 (§11, issue #14) | `tests/test_reqguard.py` |
+
+### 13.2 Pending (blocked on unbuilt modules or open issues)
+
+Add a host test for each item when its code lands, not before.
+
+- **Empty sky → `NO TRAFFIC` + local time, not a crash.** Needs `lib/card.py`
+  (§12 slice 2). The data side is covered in `tests/test_hero.py` (`states: null`
+  → no candidates; `select(None, [])` → `(None, "none")`).
+- **OpenSky unreachable / 429 / malformed JSON → panel `NO LINK`, last good card
+  kept, web UI still answers.** Needs `lib/net.py`, `lib/card.py`, and §12
+  slice 4. The client side is covered in `tests/test_httpclient.py`.
+- **Sleep makes no OpenSky request.** `tests/test_code_schedule.py` currently
+  checks this via the `poll_card()` stub's `box` serial line; once `lib/net.py`
+  replaces the stub, switch it to counting fake `httpclient.get_json` calls.
+
+### 13.3 Manual, on hardware only
+
+- Power: full-white bench draw ~15 W @ 5 V from the panel PSU; USB-C powers
+  only the S3; firmware never changes the power wiring (§3).
+- From a phone on the same LAN, save lat/lon at `http://<s3-ip>/`, power-cycle,
+  values persist (exercises `boot.py`'s read-write remount). Booted with UP
+  held, a save returns 503.
+- Sleep window: panel physically dark, serial shows no `box` lines. The night
+  level is visibly distinct from gray labels at `BIT_DEPTH = 4`.
+- Setup AP: panel shows `WIFI SETUP` / `TailWatch-XXXX` / `pw …` /
+  `192.168.4.1`; a phone joins with that password; "Save Wi-Fi & restart"
+  joins the new network; wrong credentials come back up as the setup AP.
+- Wi-Fi drop: reboot the router; serial shows `wifi:` lines and the UI is
+  reachable at the (possibly new) IP afterward; an outage over ~4 min ends in
+  a hard reset into the setup AP.
+- Web Workflow off: no `CIRCUITPY_WEB_API_PASSWORD`; the UI binds port 80
+  (no `http start failed`).
+- After `lib/net.py` / `lib/card.py`: a real OpenSky poll returns categories
+  (`extended=1`); card and badge are legible on the 128×64 panel; `NO LINK`
+  with the uplink unplugged.
 
 ## 14. Repo / files
 
@@ -515,12 +573,23 @@ lib/setupscreen.py   # new (issue #11: panel setup-AP credentials screen)
 lib/linkwatch.py     # new (station Wi-Fi drop detection + bounded reconnect)
 lib/httpclient.py    # new (shared, always-closing adafruit_requests client for lib/net.py)
 tools/gen_badges.py  # new, host-only (generates lib/logos/*.bmp)
-tests/test_enrich_filters.py    # new, host-only
-tests/test_wifisettings.py      # new, host-only (issue #11)
-tests/test_schedule_clock.py    # new, host-only (issue #11)
-tests/test_linkwatch.py         # new, host-only
-tests/test_httpclient.py        # new, host-only
-tests/test_code_linkwatch.py    # new, host-only (runs code.py with fake CircuitPython modules)
+tests/test_enrich_filters.py    # host-only
+tests/test_hero.py              # host-only
+tests/test_prefs.py             # host-only (prefs round trip, .bak, clamps, merge rules)
+tests/test_prefs_validation.py  # host-only (issue #15: lat/lon/HH:MM validation)
+tests/test_prefs_token.py       # host-only (issue #14: write-only token merge rules)
+tests/test_reqguard.py          # host-only (issue #14: same-origin guard)
+tests/test_bbox.py              # host-only (sec. 6 bbox formula)
+tests/test_dim.py               # host-only (colour dimming + sleep blank)
+tests/test_schedule.py          # host-only (sleep/night windows, US DST, sunset)
+tests/test_schedule_clock.py    # host-only (issue #11 clock-trust gate)
+tests/test_wifisettings.py      # host-only (issue #11)
+tests/test_linkwatch.py         # host-only
+tests/test_httpclient.py        # host-only
+tests/test_code_linkwatch.py    # host-only (runs code.py with fake CircuitPython modules)
+tests/test_code_schedule.py     # host-only (code.py sim: sleep skips poll, bbox from prefs)
+tests/test_code_apmode.py       # host-only (code.py sim: setup-AP fallback)
+lib/reqguard.py      # new (issue #14: same-origin/CSRF guard)
 DESIGN.md            # this file
 README.md
 ```
