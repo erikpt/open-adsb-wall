@@ -506,6 +506,28 @@ fine as plausible, correctly-shaped, legible versions of the real mark and
 left untouched. All 49 files together are a little over 50 KB; on the
 board's 512-byte FAT clusters that's comfortably inside the 8 MB flash.
 
+One more carrier was swapped after this review: `swa` (Southwest) was still
+on its Simple Icons silhouette (a monochrome heart, tinted to Southwest's
+`AIRLINES` yellow) because logo.dev's fetch for `southwest.com` came back
+bad/near-blank. Wikimedia Commons — a 403/rate-limited dead end during the
+original 34-carrier sourcing push — was reachable on a later attempt and had
+Southwest's real 2014-logo SVG, which turned out to have the tri-color heart
+(blue/red/yellow gradient triangles) as separate `<path>` elements from the
+"Southwest" wordmark text; cropping to just the heart paths gave a real,
+correctly-colored icon-only mark instead of another wordmark-lockup risk.
+It needed two things the pipeline didn't have yet: forcing "photo" mode on
+an `.svg` source (detect_mode() assumes `.svg` means the single-color
+silhouette path, wrong here since this source keeps its own 3 brand colors),
+and 16 palette steps instead of the default 8 (the gradient's yellow/orange
+end washed out to a muddy tan at 8 — median-cut quantization needs the extra
+resolution when a small-area color region has to share the palette with two
+much larger ones). Both are now first-class: `convert_logos.py --mode/--steps`
+flags, and `tools/logo_sources/sources.json` entries can be either a bare
+filename (the common case, mode/steps both default) or
+`{"file": ..., "mode": ..., "steps": ...}` when a source needs an override —
+recorded automatically the first time it's given one, so a later plain
+`--dir` re-run reproduces it without repeating the flags.
+
 Sources tried that did *not* pan out, for the next carrier that needs one:
 Simple Icons only covers the first 15 (it's a general tech/consumer brand
 set, not an airline-specific one — none of the remaining 34 appear in it);

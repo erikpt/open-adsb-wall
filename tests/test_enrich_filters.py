@@ -154,13 +154,14 @@ def test_badges_committed_and_current():
     # within the sec. 9 48x48 badge-slot budget
     manifest = convert_logos._load_manifest()
     assert set(manifest) == real, (manifest, real)
-    for icao, src_name in manifest.items():
+    for icao, entry in manifest.items():
         assert icao.upper() in AIRLINES, icao
+        src_name, mode_override, steps_override = convert_logos.manifest_entry(entry)
         src_path = os.path.join(SOURCES, src_name)
         assert os.path.isfile(src_path), src_path
         with open(os.path.join(LOGOS, icao + ".bmp"), "rb") as f:
             got = f.read()
-        data, w, h = convert_logos.convert(icao, src_path)
+        data, w, h = convert_logos.convert(icao, src_path, mode=mode_override, steps=steps_override)
         assert got == data, icao + ".bmp stale: run python3 tools/convert_logos.py --dir tools/logo_sources"
         pw, ph, pal = _parse_bmp(got)
         assert (pw, ph) == (w, h)
@@ -172,8 +173,10 @@ def test_badges_committed_and_current():
         # logo with its own real brand colors, issue #18's 34-carrier batch)
         # keeps the source's own colors instead -- see convert_logos.py's
         # docstring for why. Only assert the accent match for the mode it
-        # actually applies to.
-        if convert_logos.detect_mode(src_path) == "silhouette":
+        # actually applies to (an entry's own override, e.g. swa's forced
+        # photo mode on an .svg source, wins over the extension-based guess).
+        effective_mode = mode_override or convert_logos.detect_mode(src_path)
+        if effective_mode == "silhouette":
             assert pal[-1] == AIRLINES[icao.upper()][2], (icao, pal[-1])
         total += len(got)
 
@@ -235,8 +238,10 @@ def test_badges_decode_with_imageload():
         # see test_badges_committed_and_current: only silhouette mode tints
         # its last palette entry to the AIRLINES accent -- photo mode keeps
         # the source's own colors.
-        src_path = os.path.join(SOURCES, manifest[icao])
-        if convert_logos.detect_mode(src_path) == "silhouette":
+        src_name, mode_override, _steps_override = convert_logos.manifest_entry(manifest[icao])
+        src_path = os.path.join(SOURCES, src_name)
+        effective_mode = mode_override or convert_logos.detect_mode(src_path)
+        if effective_mode == "silhouette":
             assert pal.c[-1] == AIRLINES[icao.upper()][2], icao
         assert len(bmp.px) == bmp.w * bmp.h
 
