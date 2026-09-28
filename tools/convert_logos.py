@@ -203,8 +203,9 @@ def detect_mode(path):
     raise ValueError("unrecognized source extension: " + path)
 
 
-def convert(icao, path, mode=None, accent=None, max_dim=MAX_DIM, steps=STEPS):
+def convert(icao, path, mode=None, accent=None, max_dim=MAX_DIM, steps=None):
     icao = icao.upper()
+    steps = steps or STEPS
     if accent is None:
         if icao not in AIRLINES:
             raise KeyError("not in lib/enrich.py:AIRLINES: " + icao)
@@ -229,6 +230,18 @@ def _load_manifest():
         return {}
 
 
+def manifest_entry(value):
+    """A manifest value is either a bare filename (str, the common case: mode
+    auto-detects from its extension, steps is the default), or a dict
+    {"file": ..., "mode": ..., "steps": ...} for a source that needs a
+    non-default conversion (e.g. a multi-color .svg that must be forced into
+    "photo" mode, or a gradient-heavy source that washes out at the default
+    STEPS). Returns (filename, mode_or_None, steps_or_None)."""
+    if isinstance(value, dict):
+        return value["file"], value.get("mode"), value.get("steps")
+    return value, None, None
+
+
 def _save_manifest(manifest):
     with open(SOURCES_MANIFEST, "w") as f:
         json.dump(manifest, f, indent=2, sort_keys=True)
@@ -245,21 +258,36 @@ def _sourced_files(directory):
     return out
 
 
-def run(jobs, out_dir=LOGOS_DIR, dry_run=False, mode=None, accent=None):
-    """jobs: [(icao_lower, source_path), ...]. Returns manifest updates made."""
+def run(jobs, out_dir=LOGOS_DIR, dry_run=False, mode=None, accent=None, steps=None):
+    """jobs: [(icao_lower, source_path), ...]. Returns manifest updates made.
+
+    mode/steps here are an explicit override for this whole call (the CLI's
+    --mode/--steps flags apply to every job in it). When not given (the usual
+    --dir batch case), each job falls back to whatever override its manifest
+    entry already recorded from a previous single-file run -- see
+    manifest_entry() -- so a plain re-run reproduces every file, including
+    ones that need non-default settings, without repeating the flags.
+    """
     if not dry_run and not os.path.isdir(out_dir):
         os.makedirs(out_dir)
     manifest = _load_manifest()
     total = 0
     for icao, path in jobs:
-        data, w, h = convert(icao, path, mode=mode, accent=accent)
+        _prev_file, prev_mode, prev_steps = manifest_entry(manifest.get(icao, path))
+        job_mode = mode if mode is not None else prev_mode
+        job_steps = steps if steps is not None else prev_steps
+        data, w, h = convert(icao, path, mode=job_mode, accent=accent, steps=job_steps)
         total += len(data)
         verb = "would write" if dry_run else "wrote"
         print("%s %s.bmp  %dx%d  %d bytes  <- %s" % (verb, icao, w, h, len(data), path))
         if not dry_run:
             with open(os.path.join(out_dir, icao + ".bmp"), "wb") as f:
                 f.write(data)
-            manifest[icao] = os.path.basename(path)
+            basename = os.path.basename(path)
+            if job_mode not in (None, detect_mode(path)) or (job_steps and job_steps != STEPS):
+                manifest[icao] = {"file": basename, "mode": job_mode, "steps": job_steps}
+            else:
+                manifest[icao] = basename
     if not dry_run and jobs:
         _save_manifest(manifest)
     print(("would total " if dry_run else "total: ") + "%d bytes, %d logo(s)" % (total, len(jobs)))
@@ -279,6 +307,13 @@ def main(argv):
         i = argv.index("--accent")
         accent = int(argv[i + 1], 16)
         del argv[i : i + 2]
+    steps = None
+    if "--steps" in argv:
+        i = argv.index("--steps")
+        steps = int(argv[i + 1])
+        if not (2 <= steps <= 16):
+            sys.exit("--steps must be 2..16 (4-bit indexed BMP)")
+        del argv[i : i + 2]
 
     if "--dir" in argv:
         i = argv.index("--dir")
@@ -290,9 +325,9 @@ def main(argv):
         jobs = [(argv[0].lower(), argv[1])]
     else:
         sys.exit("usage: convert_logos.py ICAO SOURCE_IMAGE | --dir SOURCES_DIR "
-                  "[--mode silhouette|photo] [--accent RRGGBB] [--dry-run]")
+                  "[--mode silhouette|photo] [--accent RRGGBB] [--steps N] [--dry-run]")
 
-    run(jobs, dry_run=dry_run, mode=mode, accent=accent)
+    run(jobs, dry_run=dry_run, mode=mode, accent=accent, steps=steps)
 
 
 if __name__ == "__main__":

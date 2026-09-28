@@ -38,7 +38,11 @@
   "rpa": "rpa.png",
   "scx": "scx.png",
   "skw": "skw.png",
-  "swa": "swa.svg",
+  "swa": {
+    "file": "swa.svg",
+    "mode": "photo",
+    "steps": 16
+  },
   "thy": "thy.svg",
   "uae": "uae.svg",
   "ual": "ual.svg",
