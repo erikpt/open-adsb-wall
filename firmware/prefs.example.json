@@ -16,6 +16,6 @@
   "sleep_end": "06:30",
   "tz_offset_min": -360,
   "us_dst": true,
-  "api": "https://api.example.com",
+  "api": "https://opensky-network.org/api",
   "token": ""
 }

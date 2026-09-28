@@ -16,11 +16,14 @@ from adafruit_httpserver import Server, Request, Response, Status, GET, POST, Re
 from prefs import load, apply_form, public
 from urldecode import unquote_plus
 from schedule import sleeping, brightness, set_clock_synced, clock_synced, clock_trusted
-from bbox import box
 from dim import Dimmer, min_visible
 import wifisettings
 import httpclient
 import reqguard
+import net
+import filters
+import enrich
+from hero import Hero, candidates as hero_candidates
 from captiveportal import CaptiveDNS
 from linkwatch import LinkWatch, UP as LINK_UP
 
@@ -434,39 +437,53 @@ def restart_http(why):
     last_http_try = time.monotonic()
 
 
+hero = Hero(poll_s=15)  # DESIGN.md sec. 8: on-device hero selection (issue #2)
+
+
 def poll_card():
-    """Stub: returns a placeholder card. Real fetch is lib/net.py (to build).
+    """lib/net.py -> lib/filters.py -> lib/hero.py, assembled into a card dict.
 
-    When lib/net.py lands, its OpenSky request MUST go through
-    lib/httpclient.py -- never a bare adafruit_requests call -- so the web UI
-    server is never starved:
+    Raises whatever lib/net.py's OpenSky fetch raises (httpclient.HTTPStatusError
+    on a non-200, OSError / RuntimeError / TimeoutError / ValueError otherwise) --
+    the caller (the main loop, below) is what turns that into "keep the last
+    good card" per DESIGN.md sec. 8; this function never swallows a failure or
+    guesses at that policy itself. Only call it while link.state == LINK_UP
+    (the main loop already gates poll_card() on that).
 
-        import httpclient
-        try:
-            data = httpclient.get_json(pool, url, headers=auth_headers)
-        except httpclient.HTTPStatusError as e:   # 429: back off e.retry_after s
-            ...
-        except Exception as e:                    # OSError / RuntimeError / TimeoutError / ValueError
-            ...                                   # keep the last good card; show NO LINK
-
-    get_json() reuses one Session (keep-alive TLS), passes timeout=4 s,
-    caps the body read at 8 s / 32 KB, and closes the response on every
-    path. Only call it while link.state == LINK_UP (the main loop already
-    gates poll_card() on that).
+    route/type/city/phase are not populated: nothing on-device (no cloud tier,
+    issue #2) currently supplies flight-route, aircraft-type, or airport/phase
+    data for a raw ADS-B state vector -- lib/hero.py's own docstring only
+    promises position/altitude/speed/track from OpenSky. Left as "" rather
+    than invented, same shape DESIGN.md sec. 8's card documents either way.
     """
-    b = box(prefs["lat"], prefs["lon"], prefs["nm"])
-    print("box", b)
+    resp = net.poll(pool, prefs)
+    cands = filters.apply(hero_candidates(resp, prefs["lat"], prefs["lon"]), prefs)
+    c, why = hero.select(cands, time.monotonic())
+    print("hero", why, c["hex"] if c else None)
+    if c is None:
+        return {"flight": None, "airline": "", "logo": None, "route": "", "type": "",
+                "city": "", "phase": "", "alt": None, "spd": None, "track": None,
+                "hex": None, "age_s": None}
+    enr = enrich.lookup(c["cs"])
     return {
-        "flight": "NO DATA",
-        "airline": "",
+        "flight": c["cs"] or c["hex"],
+        "airline": enr[0] if enr else "",
+        "logo": enr[1] if enr else None,
         "route": "",
         "type": "",
         "city": "",
         "phase": "",
+        "alt": c["alt"],
+        "spd": c["spd"],
+        "track": c["trk"],
+        "hex": c["hex"],
+        "age_s": c["age"],
     }
 
 
 last_poll = 0
+poll_backoff_until = 0   # monotonic deadline; set past a 429's Retry-After
+last_card = None         # last successfully assembled card (kept across failed polls)
 last_bright = 0
 last_ntp_try = time.monotonic()
 while True:
@@ -534,12 +551,16 @@ while True:
         if dimmer.apply(brightness(prefs)):
             print("brightness", dimmer.level)
 
-    if online and not sleeping(prefs) and now - last_poll > 15:
+    if online and not sleeping(prefs) and now >= poll_backoff_until and now - last_poll > 15:
         last_poll = now
         try:
-            card = poll_card()
-            print(card)
+            last_card = poll_card()
+            print(last_card)
+        except httpclient.HTTPStatusError as e:
+            if e.retry_after:
+                poll_backoff_until = now + e.retry_after
+            print("poll http", e.status, "retry_after", e.retry_after)
         except Exception as e:
-            print("poll", e)
+            print("poll", e)  # OSError / RuntimeError / TimeoutError / ValueError: keep last_card
 
     time.sleep(0.05)

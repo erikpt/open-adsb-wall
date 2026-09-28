@@ -21,7 +21,7 @@ DEFAULTS = {
     "sleep_end": "06:30",
     "tz_offset_min": -360,  # standard-time UTC offset, minutes (east +); -360 = US Central
     "us_dst": True,         # auto-apply fixed US DST rule (lib/tz.py); not a tz database
-    "api": "https://api.example.com",
+    "api": "https://opensky-network.org/api",
     "token": "",
 }
 
