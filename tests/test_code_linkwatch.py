@@ -216,8 +216,14 @@ def run(events, end):
     _time.monotonic, _time.sleep = mono, sleep
     os.environ["CIRCUITPY_WIFI_SSID"] = "HomeNet"
     os.environ["CIRCUITPY_WIFI_PASSWORD"] = "hunter2-secret"
-    for name in ("linkwatch", "httpclient"):
-        sys.modules.pop(name, None)
+    # net.py binds `import httpclient` once at import time, so it must be
+    # re-imported every run too, or a later run's fake httpclient silently
+    # never takes effect (it'd still call the first run's closed-over fake).
+    # hero/filters/enrich hold no cross-run state but are evicted alongside
+    # it for the same reason, cheaply, in case that ever changes.
+    for name in ("linkwatch", "httpclient", "net", "hero", "filters", "enrich"):
+        if name not in mods:  # a fake_modules() override may supply its own
+            sys.modules.pop(name, None)
     buf = io.StringIO()
     outcome = None
     try:
