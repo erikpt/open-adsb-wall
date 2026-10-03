@@ -63,6 +63,33 @@ def test_no_op_when_level_unchanged():
     assert dm.apply(-1) is True and dm.level == 0.0 and d.brightness == 0.0
 
 
+def test_set_palette_replaces_in_place_no_leak():
+    """A freshly-loaded badge palette swapped in under the same slot must
+    replace the old entry, not grow _palettes (lib/card.py's hero-swap case,
+    DESIGN.md sec. 9's badge-palette note)."""
+    d, pal, dm, _, _ = make()
+    dm.apply(0.5)
+    assert len(dm._palettes) == 1  # just the fixture's own add_palette() entry
+
+    badge1 = [0, 0]
+    dm.set_palette("badge", badge1, (0x000000, 0x00FF00))
+    assert len(dm._palettes) == 2
+    assert badge1[1] == scale_color(0x00FF00, 0.5, 16)  # painted immediately
+
+    badge2 = [0, 0, 0]  # a differently-sized palette: a new badge, new object
+    dm.set_palette("badge", badge2, (0x000000, 0xFF0000, 0x0000FF))
+    assert len(dm._palettes) == 2, "swap leaked a new _palettes entry"
+    assert badge2[1] == scale_color(0xFF0000, 0.5, 16)
+    assert badge2[2] == scale_color(0x0000FF, 0.5, 16)
+
+    # the old badge1 object is no longer tracked, so a later apply() must not
+    # touch it (it may already be garbage on real hardware)
+    badge1_snapshot = list(badge1)
+    dm.apply(0.9, force=True)
+    assert badge1 == badge1_snapshot
+    assert badge2[1] == scale_color(0xFF0000, 0.9, 16)
+
+
 if __name__ == "__main__":
     for name in sorted(k for k in dir() if k.startswith("test_")):
         globals()[name]()

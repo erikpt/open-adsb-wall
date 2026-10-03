@@ -94,6 +94,28 @@ def fake_modules():
     mod("framebufferio", FramebufferDisplay=Any)
     mod("rgbmatrix", RGBMatrix=Any)
 
+    # issue #27: firmware/lib/card.py's (always-on, not lazily imported like
+    # setupscreen.py's) display-text/badge-decode dependencies.
+    mod("terminalio", FONT=object())
+
+    class Label:
+        def __init__(self, font, text="", color=0):
+            self.text = text
+            self.color = color
+            self.x = 0
+            self.y = 0
+
+    bitmap_label_mod = mod("adafruit_display_text.bitmap_label", Label=Label)
+    mod("adafruit_display_text", bitmap_label=bitmap_label_mod)
+
+    def imageload_load(path, bitmap=None, palette=None):
+        bmp = (bitmap or Bitmap)(1, 1, 2)
+        pal = (palette or Palette)(2)
+        pal[0], pal[1] = 0x000000, 0xFFFFFF
+        return bmp, pal
+
+    mod("adafruit_imageload", load=imageload_load)
+
     class Radio:
         connected = True
         ipv4_address = "192.168.1.50"

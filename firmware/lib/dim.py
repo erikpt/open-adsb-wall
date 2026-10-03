@@ -79,10 +79,29 @@ class Dimmer:
         self.level = None  # last applied fraction; None = never applied
         self._blanked = False
         self._palettes = []
+        self._slots = {}  # slot key -> index into self._palettes, for set_palette()
 
     def add_palette(self, palette, base_colors):
         """Register a palette to be rescaled; paints it at the current level."""
         self._palettes.append((palette, tuple(base_colors)))
+        if self.level is not None:
+            scale_palette(palette, base_colors, self.level, self.floor)
+
+    def set_palette(self, slot, palette, base_colors):
+        """Like add_palette(), but for a palette whose underlying object is a
+        different instance each time (e.g. firmware/lib/card.py's badge,
+        freshly loaded by adafruit_imageload on every hero swap): registering
+        under the same `slot` key again replaces the previous entry in place
+        instead of appending, so repeated swaps don't leak one _palettes
+        entry per poll (DESIGN.md sec. 9's badge-palette note). Paints
+        immediately at the current level rather than waiting for the next
+        apply() fraction change, since a swap can happen in between."""
+        base_colors = tuple(base_colors)
+        if slot in self._slots:
+            self._palettes[self._slots[slot]] = (palette, base_colors)
+        else:
+            self._slots[slot] = len(self._palettes)
+            self._palettes.append((palette, base_colors))
         if self.level is not None:
             scale_palette(palette, base_colors, self.level, self.floor)
 
