@@ -97,7 +97,8 @@ returns 503 and the device does not reboot.
 
 ## Next
 
-1. `firmware/lib/net.py`: implement `poll_card()` as an HTTPS GET to OpenSky's `/api/states/all` (bbox + `extended=1`)
-2. Draw the returned card with `displayio` / `terminalio` (`firmware/lib/card.py`)
-3. Wire `firmware/code.py`'s poll loop: `net.poll_card()` → `filters.apply()` → `hero.select()` → `card.draw()`
+1. ~~`firmware/lib/net.py`: OpenSky `/api/states/all` HTTPS client (bbox + `extended=1`)~~ -- done (issue #26)
+2. ~~Draw the card with `displayio` / `terminalio` (`firmware/lib/card.py`)~~ -- done (issue #27)
+3. ~~Wire `firmware/code.py`'s poll loop: net → filters → hero → enrich → card~~ -- done (issues #26, #27); `route`/`type`/`city`/`phase` stay blank, no on-device data source for them yet
 4. ~~AP-mode first-boot if `CIRCUITPY_WIFI_SSID` is empty~~ -- done (issue #11)
+5. Multi-aircraft card cycling (up to 5 jets, 12s each, no map) -- open (issue #20)

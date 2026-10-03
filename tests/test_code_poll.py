@@ -135,6 +135,33 @@ def test_empty_sky_gives_null_flight_card():
     assert cards, out
     assert cards[0]["flight"] is None, cards[0]
     assert "hero none None" in out, out
+    assert "display NO TRAFFIC" in out, out  # issue #27: panel reflects it, not just the data
+
+
+def test_real_aircraft_shows_on_display():
+    outcome, out = run_with(PIN, [("ok", [UAL_STATE])])
+    assert outcome == "stop", (outcome, out[-800:])
+    assert "display UAL123" in out, out
+    assert "display NO LINK" not in out, out
+
+
+def test_brief_failure_does_not_show_no_link():
+    # A single successful poll, then OSErrors for a run well under
+    # hero.max_stale_s (45 s for the 15 s poll interval here) -- transient
+    # failures must not flip the panel to NO LINK (DESIGN.md sec. 8: a
+    # failed poll is "no fresh candidates", not "gone").
+    outcome, out = run_with(PIN, [("ok", [UAL_STATE]), ("err", OSError("blip"))], end=30)
+    assert outcome == "stop", (outcome, out[-800:])
+    assert "display NO LINK" not in out, out
+    assert "display UAL123" in out, out
+
+
+def test_sustained_failure_eventually_shows_no_link():
+    outcome, out = run_with(PIN, [("ok", [UAL_STATE]), ("err", OSError("down"))], end=100)
+    assert outcome == "stop", (outcome, out[-800:])
+    assert "display NO LINK" in out, out
+    # NO LINK must come after a stretch of real display, not immediately
+    assert out.index("display UAL123") < out.index("display NO LINK"), out
 
 
 def test_429_backs_off_and_keeps_last_card():

@@ -345,6 +345,12 @@ Card shape (assembled on-device, not an HTTP response):
 }
 ```
 
+Units are display units, not OpenSky's raw SI ones: `alt` feet, `spd` knots,
+`track` degrees true. `firmware/lib/net.py`/`firmware/lib/hero.py` carry
+OpenSky's own meters/m-per-second; `firmware/code.py:poll_card()` is what
+converts when assembling the card (issue #27) -- `firmware/lib/card.py`
+renders whatever number it's given, no unit math of its own.
+
 Empty sky: `ok: true`, `flight: null`.  
 Fetch failure (OpenSky unreachable, rate-limited, or malformed response):
 `firmware/lib/net.py` returns `None`/raises rather than an HTTP error code; `firmware/lib/hero.py`
@@ -584,11 +590,11 @@ need no cache: they are static files already on the drive.
 | `firmware/lib/enrich.py` | callsign → airline name + badge key/path, on-device (issue #2) | exists |
 | `firmware/lib/filters.py` | on-device hide_heli / hide_mil / hide_ga (issue #2; §10) | exists |
 | `firmware/www/index.html` | settings UI | exists |
-| `firmware/code.py` | matrix, Wi-Fi join / setup-AP fallback, station reconnect watchdog, web UI server (auto-restart), NTP, dimmer schedule; poll_card() wires firmware/lib/net.py → filters → hero → enrich into a real card (issue #26) | exists |
+| `firmware/code.py` | matrix, Wi-Fi join / setup-AP fallback, station reconnect watchdog, web UI server (auto-restart), NTP, dimmer schedule; poll_card() wires firmware/lib/net.py → filters → hero → enrich into a real card, refresh_display() renders it / NO TRAFFIC / NO LINK (issues #26, #27) | exists |
 | `firmware/lib/linkwatch.py` | station Wi-Fi drop detection, bounded reconnect (6 tries, ~4 min), then hard reset into setup AP | exists |
 | `firmware/lib/httpclient.py` | shared adafruit_requests Session, 4 s timeout, 8 s/32 KB body cap, always-close get_json() for firmware/lib/net.py | exists |
 | `firmware/lib/captiveportal.py` | AP-mode captive-portal DNS responder (issue #21; §7 AP mode) | exists |
-| `firmware/lib/card.py` | render 128×64 card | **to build** (issue #27) |
+| `firmware/lib/card.py` | render 128×64 card: badge + text fields, or NO TRAFFIC / NO LINK (issue #27) | exists |
 | `firmware/lib/net.py` | HTTPS GET nearby, extended=1, optional bearer token (§8; issue #26) | exists |
 
 ### Display card (128×64)
@@ -685,13 +691,13 @@ Magnolia box, the board may be empty often (Hooks GA). Default `hide_ga: false`.
 Do these PRs/slices in order. Each slice must run on hardware or have a clear mock.
 
 1. ~~**Harden existing prefs + UI**~~ — done (issues #4, #5)
-2. **Card renderer** — `firmware/lib/card.py`, hardcoded style card on 128×64 -- **to build** (issue #27)
+2. ~~**Card renderer**~~ — done (issue #27): `firmware/lib/card.py`, fixed-slot layout on 128×64, badge via `Dimmer.set_palette()`, NO TRAFFIC / NO LINK states
 3. ~~**Schedule live**~~ — done (issue #7); ~~**Brightness dimming**~~ — done (issue #8)
 4. ~~**OpenSky HTTPS client**~~ — done (issue #26): `firmware/lib/net.py` hits OpenSky's `/api/states/all` directly with bbox + `extended=1`, optional bearer token; parses JSON via `firmware/lib/httpclient.py`
 5. ~~**Lookup tables + badges**~~ — done (issue #10: `firmware/lib/enrich.py`, `firmware/lib/filters.py`, `firmware/lib/logos/`)
 6. ~~**Hero selection**~~ — done (issue #9: `firmware/lib/hero.py`)
 7. **AP fallback** — if no Wi-Fi (issue #11, in progress)
-8. ~~**Wire it together**~~ — done for the data half (issue #26): `firmware/code.py:poll_card()` calls `firmware/lib/net.py` → `firmware/lib/filters.py` → `firmware/lib/hero.py` → `firmware/lib/enrich.py` and assembles a real card dict. Still missing `firmware/lib/card.py` (issue #27) to actually render it -- `code.py` prints the card to serial but the LED matrix still shows the placeholder group.
+8. ~~**Wire it together**~~ — done (issues #26, #27): `firmware/code.py:poll_card()` calls `firmware/lib/net.py` → `firmware/lib/filters.py` → `firmware/lib/hero.py` → `firmware/lib/enrich.py` and assembles a real card dict; `refresh_display()` renders it (or NO TRAFFIC / NO LINK) through `firmware/lib/card.py`, replacing the old placeholder group entirely.
 
 Do not start a rewrite in ESP-IDF unless CircuitPython HTTPS + HTTP server cannot coexist. If it cannot, port modules 1:1 to Arduino/ESP-IDF and keep this spec.
 
@@ -732,22 +738,9 @@ clock: they check control flow and serial output, not the panel or the radio.
 | Filters heli / mil / GA and `apply()` on hero candidates; airline prefix lookup; badges committed, current, and decodable (§8 Badges, §10) | `tests/test_enrich_filters.py` |
 | Local-UI same-origin guard: Host must match the device's address on every `/api/*` route; POSTs also require a same-origin Origin/Referer, else 403 (§11, issue #14) | `tests/test_reqguard.py` |
 | `firmware/lib/net.py`: URL has the right path/bbox/`extended=1`, no token → no `Authorization` header, a token → `Bearer <token>` (stripped), a trailing slash on `prefs.api` doesn't double up, every `httpclient.get_json` failure (`HTTPStatusError` incl. `retry_after`, `OSError`/`RuntimeError`/`TimeoutError`/`ValueError`) propagates unchanged rather than getting swallowed (§8, issue #26) | `tests/test_net.py` |
-| `firmware/code.py` real poll wiring: a real state vector becomes a card with the right flight/airline/logo/hex; empty sky → `flight: null`; a 429 backs off past its `Retry-After` (no poll fires early) and keeps the last good card; any other fetch failure also keeps the last good card without crashing the loop (§8, issue #26) | `tests/test_code_poll.py` |
-
-### 13.2 Pending (blocked on unbuilt modules or open issues)
-
-Add a host test for each item when its code lands, not before.
-
-- **Empty sky → `NO TRAFFIC` + local time, not a crash.** Needs `firmware/lib/card.py`
-  (§12 slice 2, issue #27). The data side is done: `tests/test_hero.py` (`states: null`
-  → no candidates; `select(None, [])` → `(None, "none")`) and
-  `tests/test_code_poll.py` (`poll_card()` returns `flight: None` on an empty
-  response) both cover it up to the point nothing renders it yet.
-- **OpenSky unreachable / 429 / malformed JSON → panel `NO LINK`, last good card
-  kept, web UI still answers.** The data/backoff side is done (issue #26,
-  `tests/test_net.py`, `tests/test_code_poll.py`); still needs `firmware/lib/card.py`
-  (issue #27, §12 slice 2) to actually show `NO LINK` on the panel instead of
-  just keeping `last_card` in memory.
+| `firmware/code.py` real poll wiring: a real state vector becomes a card with the right flight/airline/logo/hex; empty sky → `flight: null`; a 429 backs off past its `Retry-After` (no poll fires early) and keeps the last good card; any other fetch failure also keeps the last good card without crashing the loop; a real aircraft shows on the panel, a brief failure does not flip it to `NO LINK`, a sustained one eventually does (§8, issue #26, #27) | `tests/test_code_poll.py` |
+| `firmware/lib/card.py`: every field renders from a full card dict; empty route/type/city/phase leave their slot blank (no "None"/placeholder text); `city`/`phase` alone (no separator) when only one is set; missing alt/spd/track show `--`; a null-flight card shows `NO TRAFFIC` (+ local time when given) and hides the badge; `show_message()` clears every field; an unchanged badge key skips re-decoding it; a badge swap goes through `Dimmer.set_palette()` (no `_palettes` leak) and is painted at the dimmer's current level immediately, not just on the next brightness change (§9, issue #27) | `tests/test_card.py` |
+| `firmware/lib/dim.py:Dimmer.set_palette()`: replaces the previous registration for the same slot in place instead of appending (no leak across repeated hero swaps), paints the new palette at the current level immediately (§9, issue #27) | `tests/test_dim.py` |
 
 ### 13.3 Manual, on hardware only
 
@@ -767,9 +760,13 @@ Add a host test for each item when its code lands, not before.
   a hard reset into the setup AP.
 - Web Workflow off: no `CIRCUITPY_WEB_API_PASSWORD`; the UI binds port 80
   (no `http start failed`).
-- After `firmware/lib/net.py` / `firmware/lib/card.py`: a real OpenSky poll returns categories
-  (`extended=1`); card and badge are legible on the 128×64 panel; `NO LINK`
-  with the uplink unplugged.
+- Now that `firmware/lib/net.py` and `firmware/lib/card.py` both exist: a real
+  OpenSky poll returns categories (`extended=1`); card and badge are legible
+  on the 128×64 panel (exact layout/spacing picked without hardware -- see
+  `firmware/lib/card.py`'s module docstring -- so this is the first real
+  check of it); `NO LINK` appears with the uplink unplugged, `NO TRAFFIC`
+  with it plugged in somewhere with no nearby traffic, both with a correct
+  local-time stamp once NTP has synced.
 
 ## 14. Repo / files
 
@@ -793,7 +790,7 @@ firmware/lib/enrich.py        # new (issue #2: on-device airline lookup)
 firmware/lib/filters.py       # new (issue #2: on-device heli/mil/ga filters)
 firmware/lib/logos/*.bmp       # new, generated (issue #2: on-device badges, not fetched;
                        #   issue #18: real logo where sourced, else letter-mark)
-firmware/lib/card.py          # new (issue #27, to build)
+firmware/lib/card.py          # new (issue #27)
 firmware/lib/net.py           # new (issue #26)
 firmware/lib/wifisettings.py  # new (issue #11: AP-mode settings.toml Wi-Fi writer)
 firmware/lib/setupscreen.py   # new (issue #11: panel setup-AP credentials screen)
@@ -821,7 +818,8 @@ tests/test_code_schedule.py     # host-only (firmware/code.py sim: sleep skips p
 tests/test_code_apmode.py       # host-only (firmware/code.py sim: setup-AP fallback, captive DNS + redirects)
 tests/test_captiveportal.py     # host-only (issue #21: CaptiveDNS._build wire format)
 tests/test_net.py               # host-only (issue #26: firmware/lib/net.py URL/auth/error propagation)
-tests/test_code_poll.py         # host-only (issue #26: firmware/code.py sim, real net -> filters -> hero -> enrich wiring)
+tests/test_code_poll.py         # host-only (issues #26/#27: firmware/code.py sim, real net -> filters -> hero -> enrich -> display wiring)
+tests/test_card.py              # host-only (issue #27: firmware/lib/card.py rendering)
 firmware/lib/reqguard.py      # new (issue #14: same-origin/CSRF guard)
 DESIGN.md            # this file
 README.md
