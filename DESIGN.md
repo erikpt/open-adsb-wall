@@ -182,13 +182,19 @@ exposes the filesystem.
 
 All `/api/*` routes require `Host` to be the device's own current address;
 POSTs also require a same-origin `Origin`/`Referer`, else `403` (`firmware/lib/reqguard.py`,
-issue #14). Reaching the UI by a DNS name instead of its IP therefore returns
-403 on every `/api/*` call -- the UI is documented as `http://<ip>/`, not a
-hostname.
+issue #14). `firmware/lib/reqguard.py:check()`'s `extra_host` param (issue #31)
+additionally accepts the device's own mDNS hostname alongside its IP, so
+reaching the UI at `http://tailwatch-XXXX.local/` works for `/api/*` calls
+too, not just the initial page load.
 
 UI fields must match the schema in §6 (already drafted in `firmware/www/index.html`).
 
-MVP discovery: print IPv4 on serial and on the LED (`SETUP 192.168.x.x`) if no card yet. mDNS `tailwatch.local` is a stretch goal (CircuitPython support is uneven).
+Discovery: IPv4 printed on serial and on the LED (`SETUP 192.168.x.x`) if no
+card yet, and `http://tailwatch-XXXX.local/` (same `XXXX` suffix as the setup
+AP name) once joined to station Wi-Fi, if the board's CircuitPython build
+includes the core `mdns` module (issue #31; `firmware/lib/mdnsadv.py`) --
+entirely best-effort, since that module's availability is uneven across
+boards/versions (see §9's module table and §13.3).
 
 ### AP mode (first boot, issue #11)
 
@@ -634,6 +640,7 @@ need no cache: they are static files already on the drive.
 | `firmware/lib/linkwatch.py` | station Wi-Fi drop detection, bounded reconnect (6 tries, ~4 min), then hard reset into setup AP | exists |
 | `firmware/lib/httpclient.py` | shared adafruit_requests Session, 4 s timeout, 8 s/32 KB body cap, always-close get_json() for firmware/lib/net.py | exists |
 | `firmware/lib/captiveportal.py` | AP-mode captive-portal DNS responder (issue #21; §7 AP mode) | exists |
+| `firmware/lib/mdnsadv.py` | station-mode `tailwatch-XXXX.local` mDNS advertisement, best-effort (issue #31; §7) | exists |
 | `firmware/lib/card.py` | render 128×64 card: badge + text fields, or NO TRAFFIC / NO LINK (issue #27) | exists |
 | `firmware/lib/net.py` | HTTPS GET nearby, extended=1, optional bearer token (§8; issue #26) | exists |
 
@@ -726,7 +733,7 @@ Magnolia box, the board may be empty often (Hooks GA). Default `hide_ga: false`.
 - No cloud tier, so no device/cloud token to manage (issue #2)
 - Local UI has no auth in MVP (LAN trust). Do not expose the S3 port to WAN
 - OpenSky token (optional, only to raise the anonymous rate limit) lives in `/prefs.json` on-device. It is write-only: `token` is never present in a `GET`/`POST` `/api/prefs` response, only a `token_set` boolean (`firmware/lib/prefs.py:public()`, `firmware/lib/reqguard.py`, issue #14)
-- All `/api/*` routes require `Host` to match the device's own current address (blocks DNS rebinding); POSTs also require a same-origin `Origin` (or `Referer` if no `Origin`), or a `403` (blocks CSRF from another site the LAN browser has open) -- `firmware/lib/reqguard.py`, checked by `firmware/code.py:_guard()`
+- All `/api/*` routes require `Host` to match the device's own current address, or its mDNS hostname when advertising one (issue #31; blocks DNS rebinding -- a third-party hostname that merely resolves to the S3 is still rejected); POSTs also require a same-origin `Origin` (or `Referer` if no `Origin`), or a `403` (blocks CSRF from another site the LAN browser has open) -- `firmware/lib/reqguard.py`, checked by `firmware/code.py:_guard()`
 - CIRCUITPY is writable; do not put secrets in git
 
 ## 12. Implementation order (coding agent)
@@ -742,6 +749,7 @@ Do these PRs/slices in order. Each slice must run on hardware or have a clear mo
 7. **AP fallback** — if no Wi-Fi (issue #11, in progress)
 8. ~~**Wire it together**~~ — done (issues #26, #27): `firmware/code.py:poll_card()` calls `firmware/lib/net.py` → `firmware/lib/filters.py` → `firmware/lib/hero.py` → `firmware/lib/enrich.py` and assembles a real card dict; `refresh_display()` renders it (or NO TRAFFIC / NO LINK) through `firmware/lib/card.py`, replacing the old placeholder group entirely.
 9. ~~**Multi-aircraft cycling**~~ — done (issue #20): `firmware/lib/cycle.py:Cycle`, a `prefs.display_mode` toggle, and the ready-for-build poll gate in `firmware/code.py` (§8 "Multi-aircraft cycling")
+10. ~~**mDNS discovery**~~ — done (issue #31): `firmware/lib/mdnsadv.py`, station-mode only, best-effort (missing `mdns` module or a failed start is caught and logged, never raised); `firmware/lib/reqguard.py:check()`'s `extra_host` lets `/api/*` calls succeed when reached via the mDNS hostname, not just the IP
 
 Do not start a rewrite in ESP-IDF unless CircuitPython HTTPS + HTTP server cannot coexist. If it cannot, port modules 1:1 to Arduino/ESP-IDF and keep this spec.
 
@@ -780,13 +788,15 @@ clock: they check control flow and serial output, not the panel or the radio.
 | Outbound HTTP: one Session reused, timeout passed, response always closed, non-200 + `Retry-After`, mid-body error, 8 s / 32 KB caps (§9 Poll loop) | `tests/test_httpclient.py` |
 | Hero: candidate parsing (ground / no-position / malformed skipped; `states: null` → no candidates), closest + tie-break, hysteresis rules (a)(b)(c), no flapping, `Hero.expired()` (§8) | `tests/test_hero.py` |
 | Filters heli / mil / GA and `apply()` on hero candidates; airline prefix lookup; badges committed, current, and decodable (§8 Badges, §10) | `tests/test_enrich_filters.py` |
-| Local-UI same-origin guard: Host must match the device's address on every `/api/*` route; POSTs also require a same-origin Origin/Referer, else 403 (§11, issue #14) | `tests/test_reqguard.py` |
+| Local-UI same-origin guard: Host must match the device's address on every `/api/*` route; POSTs also require a same-origin Origin/Referer, else 403; the device's own mDNS hostname is accepted as an additional valid Host/Origin/Referer authority, a different unit's hostname is not (§11, issue #14, issue #31) | `tests/test_reqguard.py` |
 | `firmware/lib/net.py`: URL has the right path/bbox/`extended=1`, no token → no `Authorization` header, a token → `Bearer <token>` (stripped), a trailing slash on `prefs.api` doesn't double up, every `httpclient.get_json` failure (`HTTPStatusError` incl. `retry_after`, `OSError`/`RuntimeError`/`TimeoutError`/`ValueError`) propagates unchanged rather than getting swallowed (§8, issue #26) | `tests/test_net.py` |
 | `firmware/code.py` real poll wiring: a real state vector becomes a card with the right flight/airline/logo/hex; empty sky → `flight: null`; a 429 backs off past its `Retry-After` (no poll fires early) and keeps the last good card; any other fetch failure also keeps the last good card without crashing the loop; a real aircraft shows on the panel, a brief failure does not flip it to `NO LINK`, a sustained one eventually does (§8, issue #26, #27) | `tests/test_code_poll.py` |
 | `firmware/lib/card.py`: every field renders from a full card dict; empty route/type/city/phase leave their slot blank (no "None"/placeholder text); `city`/`phase` alone (no separator) when only one is set; missing alt/spd/track show `--`; a null-flight card shows `NO TRAFFIC` (+ local time when given) and hides the badge; `show_message()` clears every field; an unchanged badge key skips re-decoding it; a badge swap goes through `Dimmer.set_palette()` (no `_palettes` leak) and is painted at the dimmer's current level immediately, not just on the next brightness change (§9, issue #27) | `tests/test_card.py` |
 | `firmware/lib/dim.py:Dimmer.set_palette()`: replaces the previous registration for the same slot in place instead of appending (no leak across repeated hero swaps), paints the new palette at the current level immediately (§9, issue #27) | `tests/test_dim.py` |
 | `firmware/lib/cycle.py:Cycle`: `build()` sorts to the closest `MAX_CARDS` by `hero.rank()`, restarting the rotation; fewer than 5 candidates cycles through only what exists, no padding; `tick()` holds each card `DWELL_S` then advances, wrapping back to card 1; `ready_for_build()` is true only once a snapshot is absent or has been shown all the way through (§8, issue #20) | `tests/test_cycle.py` |
 | `firmware/code.py` in `display_mode: "cycle"`: candidates rotate closest-first through up to 5 cards at `DWELL_S` each and wrap back to the first; the OpenSky poll itself is skipped (not just discarded) while a rotation is still in progress, so a 3-candidate (36 s) rotation makes only 2 poll calls in 60 s, not 4; an empty sky still shows `NO TRAFFIC`, not a crash (§8, §9, issue #20) | `tests/test_code_cycle.py` |
+| `firmware/lib/mdnsadv.py:Advertiser`: `start()` registers `_http._tcp` on port 80 at the given hostname; a missing `mdns` module or a construction failure is caught, not raised; `start()` stops any previous server first (safe to call again on a reconnect) (§7, issue #31) | `tests/test_mdnsadv.py` |
+| `firmware/code.py` mDNS wiring: station mode advertises `tailwatch-XXXX.local` (`XXXX` from the radio MAC, matching the setup-AP suffix), AP mode does not; a Wi-Fi drop stops advertising and a reconnect restarts it under the same (possibly new) hostname; a board/build without the `mdns` module still brings up the plain IP-based UI with no crash (§7, §9, issue #31) | `tests/test_code_mdns.py` |
 
 ### 13.3 Manual, on hardware only
 
@@ -813,6 +823,17 @@ clock: they check control flow and serial output, not the panel or the radio.
   check of it); `NO LINK` appears with the uplink unplugged, `NO TRAFFIC`
   with it plugged in somewhere with no nearby traffic, both with a correct
   local-time stamp once NTP has synced.
+- mDNS (issue #31, first real check -- host tests fake the `mdns` module
+  entirely, see `firmware/lib/mdnsadv.py`'s docstring): confirm this board's
+  CircuitPython build actually has the core `mdns` module and that
+  `http://tailwatch-XXXX.local/` resolves and loads the settings UI
+  end-to-end (including `/api/prefs` succeeding, not just the page) from a
+  phone/laptop on the same LAN; two units on one LAN get two distinct
+  hostnames; a Wi-Fi drop and reconnect re-resolve correctly, not a stale
+  mapping. If `mdns` is missing or unreliable on this board/CircuitPython
+  version, document that here and close issue #31 as won't-fix rather than
+  leaving it silently half-working -- the IP-based fallback (serial /
+  `SETUP` text) is unaffected either way.
 
 ## 14. Repo / files
 
@@ -844,6 +865,7 @@ firmware/lib/setupscreen.py   # new (issue #11: panel setup-AP credentials scree
 firmware/lib/linkwatch.py     # new (station Wi-Fi drop detection + bounded reconnect)
 firmware/lib/httpclient.py    # new (shared, always-closing adafruit_requests client for firmware/lib/net.py)
 firmware/lib/captiveportal.py # new (issue #21: AP-mode captive-portal DNS responder)
+firmware/lib/mdnsadv.py       # new (issue #31: station-mode mDNS advertisement, best-effort)
 tools/gen_badges.py     # new, host-only (generates firmware/lib/logos/*.bmp letter-marks)
 tools/convert_logos.py  # new, host-only (issue #18: real logos -> firmware/lib/logos/*.bmp)
 tools/logo_sources/     # new (issue #18: sourced logo images + sources.json manifest)
@@ -869,6 +891,8 @@ tests/test_code_poll.py         # host-only (issues #26/#27: firmware/code.py si
 tests/test_card.py              # host-only (issue #27: firmware/lib/card.py rendering)
 tests/test_cycle.py             # host-only (issue #20: firmware/lib/cycle.py rotation logic)
 tests/test_code_cycle.py        # host-only (issue #20: firmware/code.py sim, cycle-mode rotation + poll gating)
+tests/test_mdnsadv.py           # host-only (issue #31: firmware/lib/mdnsadv.py Advertiser)
+tests/test_code_mdns.py         # host-only (issue #31: firmware/code.py sim, mDNS wiring + reconnect)
 firmware/lib/reqguard.py      # new (issue #14: same-origin/CSRF guard)
 DESIGN.md            # this file
 README.md

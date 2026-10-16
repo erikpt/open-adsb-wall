@@ -58,7 +58,11 @@ file save) does not re-run it.
 - If an existing board's `settings.toml` has `CIRCUITPY_WEB_API_PASSWORD`, delete
   that line and hard reset. Otherwise Web Workflow holds port 80, the TailWatch
   UI prints "http start failed", and the filesystem is exposed on the LAN.
-- Local UI: `http://<s3-ip>/` after it joins Wi-Fi
+- Local UI: `http://<s3-ip>/` after it joins Wi-Fi, or `http://tailwatch-XXXX.local/`
+  (same `XXXX` suffix as the setup AP name, so two units on one LAN never
+  collide) if your network supports mDNS/Bonjour and the board's CircuitPython
+  build includes the `mdns` module -- if not, `firmware/lib/mdnsadv.py` prints
+  nothing extra and the IP-based URL above still works
 - Prefs saved on device (`/prefs.json`)
 - Sleep blanks the panel (`brightness = 0`)
 - Night mode: off / fixed hours / after local sunset

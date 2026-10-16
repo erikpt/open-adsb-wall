@@ -27,6 +27,7 @@ import enrich
 from hero import Hero, candidates as hero_candidates
 from cycle import Cycle
 from card import Card
+from mdnsadv import Advertiser
 from captiveportal import CaptiveDNS
 from linkwatch import LinkWatch, UP as LINK_UP
 
@@ -80,6 +81,15 @@ NTP_RESYNC_S = 86400         # station mode, daily re-sync for RTC drift
 HTTP_FAIL_LIMIT = 5          # consecutive server.poll() exceptions -> restart the server
 HTTP_RETRY_S = 30            # server failed to start: retry this often
 PW_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"  # 32 chars, no l/o/0/1
+
+
+def device_suffix():
+    """4 lowercase hex chars from the radio MAC -- same scheme as
+    start_setup_ap()'s "TailWatch-XXXX" AP SSID, so a unit's mDNS hostname
+    (issue #31) and its setup-AP name agree. Two units on the same LAN
+    (DESIGN.md sec. 5) can't both answer to a bare "tailwatch.local"."""
+    mac = wifi.radio.mac_address
+    return "%02x%02x" % (mac[-2], mac[-1])
 
 
 def join_station():
@@ -230,9 +240,14 @@ def _json(request, obj, code=200, reason="OK"):
 
 def _guard(request, write):
     """403 Response if the request isn't same-origin for this device, else None.
-    Reads the global `host`, so it follows LinkWatch IP changes and AP mode."""
+    Reads the global `host`, so it follows LinkWatch IP changes and AP mode.
+    Also accepts the device's own mDNS hostname (issue #31) when it's
+    running -- `mdns_adv` is station-mode only and stays None in AP mode, so
+    a page reached that way never gets an extra_host to match against."""
     h = request.headers  # adafruit_httpserver Headers: case-insensitive .get
-    why = reqguard.check(h.get("Host"), h.get("Origin"), h.get("Referer"), host, write)
+    extra = mdns_adv.hostname + ".local" if mdns_adv is not None else None
+    why = reqguard.check(h.get("Host"), h.get("Origin"), h.get("Referer"), host, write,
+                          extra_host=extra)
     if why is None:
         return None
     print("api 403:", why)
@@ -392,6 +407,15 @@ def start_http():
 server = start_http()
 http_fails = 0                  # consecutive server.poll() exceptions
 last_http_try = time.monotonic()
+
+# Station mode only (issue #31): AP mode's captive-portal onboarding has no
+# use for a hostname, and two units on the same LAN must not both answer to
+# the same name (DESIGN.md sec. 5) -- device_suffix() gives each its own.
+mdns_adv = None
+if not ap_mode:
+    mdns_adv = Advertiser(wifi.radio, "tailwatch-" + device_suffix())
+    if mdns_adv.start():
+        print("ui http://%s.local/" % mdns_adv.hostname)
 
 
 def restart_http(why):
@@ -556,10 +580,14 @@ while True:
         if ev is not None:
             if ev[0] == "down":
                 httpclient.reset()  # pooled outbound sockets died with the link
+                if mdns_adv is not None:
+                    mdns_adv.stop()  # don't keep answering queries while actually down
             elif ev[0] == "up":
                 host = ev[2]
                 httpclient.reset()
                 restart_http("wifi up" if ev[1] == ev[2] else "ip %s -> %s" % (ev[1], ev[2]))
+                if mdns_adv is not None:
+                    mdns_adv.start()
                 if not clock_synced():
                     last_ntp_try = now - NTP_RETRY_S  # retry NTP now, not in up to 5 min
             elif ev[0] == "reset":
