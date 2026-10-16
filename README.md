@@ -19,6 +19,7 @@ MatrixPortal S3 + 128x64 HUB75 panel.
 - `firmware/lib/buttons.py` (hold-to-trigger button helper)
 - `firmware/lib/badapple.py`, `firmware/lib/badapple_frames.py` (Bad Apple easter egg, hold UP 5s -- issue #30)
 - `firmware/lib/nyan.py` (Nyan Cat easter egg; not currently wired into `firmware/code.py`)
+- `firmware/lib/ota.py` (OTA firmware updates from the web UI -- issue #29)
 
 Libraries from the CircuitPython bundle:
 
@@ -55,6 +56,39 @@ then hard reset.
 
 `firmware/boot.py` only runs on hard reset/power-up; a soft reload (Ctrl-D,
 file save) does not re-run it.
+
+## OTA firmware updates (no USB needed)
+
+The web UI's "Firmware update" section can update `code.py`/`lib/*`/`www/*`
+over Wi-Fi, no physical access required -- useful for the second unit
+(DESIGN.md sec. 5). Paste the URL of a manifest JSON file (host it
+anywhere reachable, e.g. a GitHub release asset):
+
+```json
+{
+  "version": "1.4.0",
+  "files": [
+    {"path": "code.py", "url": "https://.../code.py",
+     "sha256": "<sha256 hex digest>", "size": 12345}
+  ]
+}
+```
+
+"Check for update" fetches and validates the manifest without changing
+anything; "Apply update" re-fetches and verifies every file's checksum and
+size before writing anything, then restarts. If something goes wrong after
+applying, "Roll back last update" restores the previous version of every
+file that update changed (one level of history). This is all pull-only --
+the device fetches from the URL you give it, there is no push/hosted update
+service of this project's own (issue #2: no cloud tier).
+
+If a power cut happens mid-apply, the next boot finishes the interrupted
+file swap on its own (`firmware/lib/ota.py:recover()`, same crash-safe
+`.new`/`.bak` dance as the Wi-Fi settings writer) rather than leaving a
+mixed set of old/new files. There is no automatic "this update won't boot,
+revert" detection yet -- if an update leaves the device unreachable over
+Wi-Fi, recover with the USB procedure above (or a full reflash) and roll
+back from there.
 
 ## Behavior
 

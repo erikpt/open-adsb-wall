@@ -32,6 +32,7 @@ from captiveportal import CaptiveDNS
 from linkwatch import LinkWatch, UP as LINK_UP
 from buttons import HoldButton
 import badapple
+import ota
 
 displayio.release_displays()
 
@@ -161,6 +162,7 @@ def show_setup_screen(lines):
 
 
 wifisettings.recover()  # finish an interrupted settings.toml swap before reading it
+ota.recover()  # finish an interrupted OTA file swap before anything it might have touched loads (issue #29)
 sta_ok, cfg_ssid = join_station()
 ap_mode = not sta_ok
 ap_ssid = ""
@@ -364,6 +366,92 @@ def post_wifi(request: Request):
     return _json(request, {"ok": True, "ssid": ssid, "rebooting": True})
 
 
+def _ota_url(request):
+    """{"url": "https://..."} JSON body -> the url string, or None (+ a 400
+    Response already built) if the body is missing/malformed. Query-string
+    args are skipped on purpose, same reasoning as post_wifi's include_query
+    =False -- a manifest URL doesn't belong in a log/URL history either."""
+    form, _ = _read_form(request, include_query=False)
+    if form is None:
+        return None, _json(request, {"error": "invalid JSON body"}, 400, "Bad Request")
+    url = form.get("url")
+    if not isinstance(url, str) or not url.lower().startswith("https://"):
+        return None, _json(request, {"error": "url must be https://"}, 400, "Bad Request")
+    return url, None
+
+
+def post_ota_check(request: Request):
+    """{"url": manifest url} -> fetch + validate it, report version/files,
+    apply nothing. issue #29: lets the owner see what an update contains
+    before committing to post_ota_apply."""
+    bad = _guard(request, True)  # a POST that makes the device fetch an owner-given
+    if bad:                      # URL is exactly the SSRF-via-CSRF shape reqguard.py
+        return bad                # exists to block, so this is write=True like any POST
+    _touch()
+    url, bad = _ota_url(request)
+    if bad:
+        return bad
+    try:
+        m = ota.fetch_manifest(pool, url)
+    except ota.OTAError as e:
+        return _json(request, {"error": str(e)}, 400, "Bad Request")
+    except Exception as e:
+        print("ota check failed", e)
+        return _json(request, {"error": "fetch failed: %s" % e}, 502, "Bad Gateway")
+    files = [{"path": f["path"], "size": f["size"]} for f in m["files"]]
+    return _json(request, {"ok": True, "version": m["version"], "files": files})
+
+
+def post_ota_apply(request: Request):
+    """{"url": manifest url} -> re-fetch + apply it, then hard reset.
+    Always re-fetches rather than trusting a prior post_ota_check response:
+    the manifest could have changed, and this is the one call that actually
+    writes to the filesystem, so it verifies for itself."""
+    global reset_at
+    bad = _guard(request, True)
+    if bad:
+        return bad
+    _touch()
+    url, bad = _ota_url(request)
+    if bad:
+        return bad
+    try:
+        m = ota.fetch_manifest(pool, url)
+        version = ota.apply(pool, m)
+    except ota.OTAError as e:
+        return _json(request, {"error": str(e)}, 400, "Bad Request")
+    except OSError as e:
+        print("ota apply failed", e)
+        return _json(request, {"error": "CIRCUITPY read-only (booted with UP held?)"},
+                     503, "Service Unavailable")
+    except Exception as e:
+        print("ota apply failed", e)
+        return _json(request, {"error": "update failed: %s" % e}, 502, "Bad Gateway")
+    print("ota applied", version, "- hard reset in", RESET_DELAY_S, "s")
+    reset_at = time.monotonic() + RESET_DELAY_S
+    return _json(request, {"ok": True, "version": version, "rebooting": True})
+
+
+def post_ota_rollback(request: Request):
+    """Restore the last applied update's backed-up files, then hard reset."""
+    global reset_at
+    bad = _guard(request, True)
+    if bad:
+        return bad
+    _touch()
+    try:
+        restored = ota.rollback()
+    except ota.OTAError as e:
+        return _json(request, {"error": str(e)}, 400, "Bad Request")
+    except OSError as e:
+        print("ota rollback failed", e)
+        return _json(request, {"error": "CIRCUITPY read-only (booted with UP held?)"},
+                     503, "Service Unavailable")
+    print("ota rolled back", restored, "- hard reset in", RESET_DELAY_S, "s")
+    reset_at = time.monotonic() + RESET_DELAY_S
+    return _json(request, {"ok": True, "restored": restored, "rebooting": True})
+
+
 # AP mode only (issue #21): known captive-portal detection probe paths.
 # Each OS expects a specific exact response (Android: 204 + empty body,
 # Apple: 200 + one exact HTML string, Windows: specific plain-text bodies)
@@ -395,6 +483,9 @@ def start_http():
         srv.route("/api/prefs", POST)(post_prefs)
         srv.route("/api/status", GET)(get_status)
         srv.route("/api/wifi", POST)(post_wifi)
+        srv.route("/api/ota/check", POST)(post_ota_check)
+        srv.route("/api/ota/apply", POST)(post_ota_apply)
+        srv.route("/api/ota/rollback", POST)(post_ota_rollback)
         if ap_mode:
             for p in CAPTIVE_CHECK_PATHS:
                 srv.route(p, GET)(captive_redirect)

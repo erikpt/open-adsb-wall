@@ -179,6 +179,9 @@ exposes the filesystem.
 | `/api/prefs` | POST | form or JSON merge → save → apply brightness (station mode only) |
 | `/api/status` | GET | `{mode, ip, ssid, ap_ssid, networks, clock_synced, clock_trusted, rebooting, wifi_drops}` -- never a password |
 | `/api/wifi` | POST | JSON or form `{ssid, password, open}` → `firmware/lib/wifisettings.py` → `/settings.toml` → hard reset (§ AP mode below) |
+| `/api/ota/check` | POST | `{url}` (manifest) → fetch + validate only, no write → `{version, files: [{path, size}]}` (issue #29) |
+| `/api/ota/apply` | POST | `{url}` (manifest) → re-fetch + verify + apply every file → hard reset (issue #29; §8a) |
+| `/api/ota/rollback` | POST | restore the last applied update's backed-up files → hard reset (issue #29; §8a) |
 
 All `/api/*` routes require `Host` to be the device's own current address;
 POSTs also require a same-origin `Origin`/`Referer`, else `403` (`firmware/lib/reqguard.py`,
@@ -317,6 +320,63 @@ otherwise keeps a listening socket bound to the address that just went away:
 
 Known blocking: each reconnect attempt can block for up to 10 s (pausing the
 dimmer schedule), and the UI is unreachable during an outage anyway.
+
+### OTA firmware updates (issue #29)
+
+No cloud tier (issue #2), so delivery is owner-pulled, not device-initiated
+or push-based: the owner pastes a manifest URL into the local web UI, the
+device fetches it and every file it lists directly via
+`firmware/lib/httpclient.py` (same "device calls out, nothing calls in"
+shape as the OpenSky poll), with no account, token, or hosted update
+service of this project's own involved.
+
+Manifest (JSON, at the owner-supplied URL): `{"version": "...", "files":
+[{"path", "url", "sha256", "size"}, ...]}`. `path` is checked against an
+allow-list (`firmware/lib/ota.py:safe_path()`: must be `code.py` or start
+with `lib/` or `www/`, no `..` traversal, no leading `/`) so a malicious or
+buggy manifest can't be pointed at `settings.toml`, `prefs.json`, `boot.py`,
+or outside the firmware tree at all.
+
+Safety (this issue's acceptance criteria):
+
+- **Integrity first.** Every file is fetched and SHA-256/size-verified
+  against the manifest into a `<path>.ota_new` staging file *before*
+  anything live is touched. If CircuitPython's `hashlib` isn't available on
+  this build (uneven across boards/versions, same caveat as
+  `firmware/lib/mdnsadv.py`'s `mdns`), `apply()` refuses outright rather
+  than silently skipping verification.
+- **All or nothing.** If any file fails to fetch or verify, every
+  `.ota_new` already staged is deleted and the apply aborts -- zero live
+  files touched, not a partially-applied update.
+- **Crash-safe swap**, once staging succeeds for every file: each file's
+  replacement is the exact `path.new -> (path -> path.bak) -> path` dance
+  `firmware/lib/wifisettings.py:save()`/`recover()` already use for
+  `settings.toml`, just looped per file (`firmware/lib/ota.py:_swap_one()`).
+  `/ota_state.json` records which files are mid-swap so
+  `firmware/lib/ota.py:recover()` -- called at boot, right after
+  `wifisettings.recover()`, before anything an OTA might have replaced gets
+  imported -- can finish an interrupted swap instead of leaving a
+  half-applied, possibly unbootable set of files.
+- **Rollback.** Each file's immediately-previous version survives at
+  `<path>.ota_bak` after a completed apply; `rollback()` (a web UI button,
+  `POST /api/ota/rollback`) swaps every one back. One level of history
+  only, and manual/owner-triggered -- automatic boot-failure detection
+  would need `firmware/boot.py` changes and a crash counter, and is **out
+  of scope** for this first cut; a bad update that won't boot still needs
+  the owner to physically recover it (see `README.md`'s "Updating files"
+  recovery procedure) and trigger the rollback themselves once it's back up
+  enough to reach the web UI, or reflash over USB as a last resort.
+
+Web UI flow: "Check for update" (`POST /api/ota/check`) fetches and
+validates the manifest without writing anything, showing the version and
+file list/sizes; "Apply update" (`POST /api/ota/apply`) re-fetches and
+re-verifies the manifest (never trusts the earlier check response) and runs
+the full pipeline, then hard-resets on success, same `RESET_DELAY_S`
+pattern as `POST /api/wifi`. Both, and rollback, are CSRF-protected
+(`write=True` through `firmware/lib/reqguard.py`) even though check doesn't
+write to the filesystem: a POST that makes the device fetch an
+owner-supplied URL is exactly the SSRF-via-CSRF shape that guard exists to
+block, so it gets the same protection as any other POST.
 
 ## 8. On-device card assembly (was "Cloud API")
 
@@ -640,9 +700,10 @@ need no cache: they are static files already on the drive.
 | `firmware/www/index.html` | settings UI | exists |
 | `firmware/code.py` | matrix, Wi-Fi join / setup-AP fallback, station reconnect watchdog, web UI server (auto-restart), NTP, dimmer schedule; poll_card() wires firmware/lib/net.py → filters → hero (or cycle, by prefs.display_mode) → enrich into a real card via `_assemble_card()`, refresh_display() renders it / NO TRAFFIC / NO LINK (issues #26, #27, #20) | exists |
 | `firmware/lib/linkwatch.py` | station Wi-Fi drop detection, bounded reconnect (6 tries, ~4 min), then hard reset into setup AP | exists |
-| `firmware/lib/httpclient.py` | shared adafruit_requests Session, 4 s timeout, 8 s/32 KB body cap, always-close get_json() for firmware/lib/net.py | exists |
+| `firmware/lib/httpclient.py` | shared adafruit_requests Session, 4 s timeout, 8 s/32 KB body cap; always-close get_bytes()/get_json() for firmware/lib/net.py and firmware/lib/ota.py | exists |
 | `firmware/lib/captiveportal.py` | AP-mode captive-portal DNS responder (issue #21; §7 AP mode) | exists |
 | `firmware/lib/mdnsadv.py` | station-mode `tailwatch-XXXX.local` mDNS advertisement, best-effort (issue #31; §7) | exists |
+| `firmware/lib/ota.py` | owner-pulled OTA update: manifest fetch/validate, per-file checksum + crash-safe stage-then-swap apply, recover(), rollback() (issue #29; §7 "OTA firmware updates") | exists |
 | `firmware/lib/card.py` | render 128×64 card: badge + text fields, or NO TRAFFIC / NO LINK (issue #27) | exists |
 | `firmware/lib/net.py` | HTTPS GET nearby, extended=1, optional bearer token (§8; issue #26) | exists |
 
@@ -787,6 +848,7 @@ Magnolia box, the board may be empty often (Hooks GA). Default `hide_ga: false`.
 - OpenSky token (optional, only to raise the anonymous rate limit) lives in `/prefs.json` on-device. It is write-only: `token` is never present in a `GET`/`POST` `/api/prefs` response, only a `token_set` boolean (`firmware/lib/prefs.py:public()`, `firmware/lib/reqguard.py`, issue #14)
 - All `/api/*` routes require `Host` to match the device's own current address, or its mDNS hostname when advertising one (issue #31; blocks DNS rebinding -- a third-party hostname that merely resolves to the S3 is still rejected); POSTs also require a same-origin `Origin` (or `Referer` if no `Origin`), or a `403` (blocks CSRF from another site the LAN browser has open) -- `firmware/lib/reqguard.py`, checked by `firmware/code.py:_guard()`
 - CIRCUITPY is writable; do not put secrets in git
+- OTA (issue #29): no auth beyond the same `/api/*` same-origin/CSRF guard everything else gets (LAN trust, same as the rest of this UI) -- but every fetched file is SHA-256/size-checked against the manifest before it can ever replace code running on the device, since unlike a `/prefs.json` value an OTA file's contents run as code next boot. An attacker who already controls the LAN well enough to pass the same-origin check could already reach every other `/api/*` route, so this isn't a materially larger blast radius, just a worse flavor of "LAN trust" if it were ever abused -- the real-world remaining risk is the manifest URL the owner supplies, not the pull mechanism itself.
 
 ## 12. Implementation order (coding agent)
 
@@ -803,6 +865,7 @@ Do these PRs/slices in order. Each slice must run on hardware or have a clear mo
 9. ~~**Multi-aircraft cycling**~~ — done (issue #20): `firmware/lib/cycle.py:Cycle`, a `prefs.display_mode` toggle, and the ready-for-build poll gate in `firmware/code.py` (§8 "Multi-aircraft cycling")
 10. ~~**mDNS discovery**~~ — done (issue #31): `firmware/lib/mdnsadv.py`, station-mode only, best-effort (missing `mdns` module or a failed start is caught and logged, never raised); `firmware/lib/reqguard.py:check()`'s `extra_host` lets `/api/*` calls succeed when reached via the mDNS hostname, not just the IP
 11. ~~**Second easter egg**~~ — done (issue #30): `firmware/lib/badapple.py:Player` (cooperative, non-blocking) plus generated `firmware/lib/badapple_frames.py` (`tools/gen_badapple.py`), hold UP 5 s; wired into `firmware/code.py`'s main loop alongside the pre-existing, still-unwired `firmware/lib/nyan.py` (§9 "Easter eggs")
+12. ~~**OTA firmware updates**~~ — done (issue #29): `firmware/lib/ota.py` (manifest fetch/validate, checksum, crash-safe stage-then-swap apply, recover(), rollback()), `firmware/lib/httpclient.py:get_bytes()`, three new `/api/ota/*` routes, and a web UI section (§7 "OTA firmware updates")
 
 Do not start a rewrite in ESP-IDF unless CircuitPython HTTPS + HTTP server cannot coexist. If it cannot, port modules 1:1 to Arduino/ESP-IDF and keep this spec.
 
@@ -853,6 +916,7 @@ clock: they check control flow and serial output, not the panel or the radio.
 | `firmware/lib/buttons.py:HoldButton`: fires exactly once after a continuous `hold_s`-second press, needs a release before firing again, a release before `hold_s` elapses resets the timer, active-low `pressed()` (§9, issue #30) | `tests/test_buttons.py` |
 | `firmware/lib/badapple.py`: `decode_frame()` unpacks the row-wrap RLE scheme correctly (incl. a row that starts "on"); `Player.start()` swaps in its own bitmap/group and saves the prior display state; `tick()` decodes at most one frame, paced by fps, not on every call; the clip ending or `stop()` restores the prior root_group/brightness and deactivates; a `stop()`/`tick()` when not active is a no-op; restarting after a stop replays from frame 0 (§9 "Easter eggs", issue #30) | `tests/test_badapple.py` |
 | `firmware/code.py` Bad Apple wiring: hold UP 5 s starts playback without a shorter hold firing early; `server.poll()` keeps running every iteration throughout (no single multi-second stall); a repeat trigger (hold UP 5 s again while playing) stops it early; the normal card display resumes afterward (§9 "Easter eggs", issue #30) | `tests/test_code_badapple.py` |
+| `firmware/lib/ota.py`: `safe_path()` allow-list (code.py/lib//www/, no traversal); `parse_manifest()` rejects bad JSON, missing version/files, unsafe paths, non-https urls, malformed sha256, duplicates, oversize; `apply()` stages+verifies every file before touching any live one, aborts and cleans up `.ota_new` on any failure (fetch, size mismatch, checksum mismatch, missing `hashlib`) with zero live files touched, and backs up an existing file to `.ota_bak` before swapping in the new one; `recover()` finishes an interrupted swap (or no-ops with nothing to do); `rollback()` restores every file with a `.ota_bak`, skips ones without one, and refuses with no completed update recorded (§7 "OTA firmware updates", issue #29) | `tests/test_ota.py` |
 
 ### 13.3 Manual, on hardware only
 
@@ -896,6 +960,18 @@ clock: they check control flow and serial output, not the panel or the radio.
   without hardware, same caveat as the card layout), holding UP again
   mid-clip stops it and the normal card display resumes immediately, and
   the web UI stays responsive (no visible stall) the whole time it plays.
+- OTA (issue #29, first real check -- host tests fake `firmware/lib/httpclient.py`
+  and run against a throwaway directory, never real CIRCUITPY paths):
+  confirm `hashlib.sha256` is actually available and correct on this
+  board's CircuitPython build (if not, document that here -- `apply()`
+  already refuses cleanly rather than skipping verification, so this is a
+  "does the feature work at all" check, not a safety gap); check for an
+  update, apply one that changes a small file (e.g. `firmware/lib/tz.py`)
+  and confirm the device reboots running the new version; pull USB power
+  mid-apply (after a file's `.ota_new` is staged but before every swap
+  finishes) and confirm the next boot's `ota.recover()` leaves a fully
+  consistent set of files, not a mix of old and new; roll back and confirm
+  the previous version is restored and boots.
 
 ## 14. Repo / files
 
@@ -928,6 +1004,7 @@ firmware/lib/linkwatch.py     # new (station Wi-Fi drop detection + bounded reco
 firmware/lib/httpclient.py    # new (shared, always-closing adafruit_requests client for firmware/lib/net.py)
 firmware/lib/captiveportal.py # new (issue #21: AP-mode captive-portal DNS responder)
 firmware/lib/mdnsadv.py       # new (issue #31: station-mode mDNS advertisement, best-effort)
+firmware/lib/ota.py           # new (issue #29: manifest fetch/validate, checksum, crash-safe apply/recover/rollback)
 firmware/lib/buttons.py       # hold-to-trigger button helper; wired into firmware/code.py (issue #30)
 firmware/lib/nyan.py          # Nyan Cat easter egg (hold DOWN 5s) -- still not wired into firmware/code.py
 firmware/lib/badapple.py      # new (issue #30: Bad Apple easter egg, cooperative/non-blocking Player)
@@ -960,6 +1037,7 @@ tests/test_cycle.py             # host-only (issue #20: firmware/lib/cycle.py ro
 tests/test_code_cycle.py        # host-only (issue #20: firmware/code.py sim, cycle-mode rotation + poll gating)
 tests/test_mdnsadv.py           # host-only (issue #31: firmware/lib/mdnsadv.py Advertiser)
 tests/test_code_mdns.py         # host-only (issue #31: firmware/code.py sim, mDNS wiring + reconnect)
+tests/test_ota.py               # host-only (issue #29: firmware/lib/ota.py manifest/apply/recover/rollback)
 tests/test_buttons.py           # host-only (issue #30: firmware/lib/buttons.py HoldButton)
 tests/test_badapple.py          # host-only (issue #30: firmware/lib/badapple.py decode + Player)
 tests/test_code_badapple.py     # host-only (issue #30: firmware/code.py sim, hold-UP trigger + non-blocking playback)

@@ -78,7 +78,12 @@ clock-trust gate so a failed NTP sync can't strand the panel dark),
 always-closing HTTP client pattern `firmware/lib/net.py` must use),
 `reqguard.py` (same-origin/CSRF guard on the local API), `dim.py`
 (color-scaled brightness — `rgbmatrix`'s `display.brightness` is effectively
-binary on this hardware, not a real dimmer).
+binary on this hardware, not a real dimmer), `ota.py` (owner-pulled OTA
+firmware updates from a web-UI-supplied manifest URL, issue #29 — checksum
+verification before anything live is touched, a crash-safe per-file
+stage-then-swap apply mirroring `wifisettings.py`'s `.new`/`.bak` dance, and
+a manual `rollback()`; see `DESIGN.md` §7 "OTA firmware updates" for the
+full safety design).
 
 `buttons.py` (hold-to-trigger button helper) backs the Bad Apple easter egg,
 `badapple.py` (hold UP 5s, issue #30 — frame data in `badapple_frames.py`,
