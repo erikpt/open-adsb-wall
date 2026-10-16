@@ -25,6 +25,7 @@ import net
 import filters
 import enrich
 from hero import Hero, candidates as hero_candidates
+from cycle import Cycle
 from card import Card
 from captiveportal import CaptiveDNS
 from linkwatch import LinkWatch, UP as LINK_UP
@@ -410,20 +411,17 @@ def restart_http(why):
 
 
 hero = Hero(poll_s=15)  # DESIGN.md sec. 8: on-device hero selection (issue #2)
+cyc = Cycle()           # prefs["display_mode"] == "cycle": up to 5 jets, 12 s each (issue #20)
 
 M_TO_FT = 3.280840    # OpenSky altitude is meters; the card shape is feet (DESIGN.md sec. 8)
 MPS_TO_KT = 1.943844  # OpenSky velocity is m/s; the card shape is knots (DESIGN.md sec. 8)
 
 
-def poll_card():
-    """lib/net.py -> lib/filters.py -> lib/hero.py, assembled into a card dict.
+def _assemble_card(c):
+    """lib/hero.py:candidates() dict (or None) -> the card dict lib/card.py renders.
 
-    Raises whatever lib/net.py's OpenSky fetch raises (httpclient.HTTPStatusError
-    on a non-200, OSError / RuntimeError / TimeoutError / ValueError otherwise) --
-    the caller (the main loop, below) is what turns that into "keep the last
-    good card" per DESIGN.md sec. 8; this function never swallows a failure or
-    guesses at that policy itself. Only call it while link.state == LINK_UP
-    (the main loop already gates poll_card() on that).
+    Shared by both display_mode paths (issue #20): hero mode hands this
+    hero.select()'s pick, cycle mode hands this lib/cycle.py:Cycle.tick()'s.
 
     route/type/city/phase are not populated: nothing on-device (no cloud tier,
     issue #2) currently supplies flight-route, aircraft-type, or airport/phase
@@ -431,10 +429,6 @@ def poll_card():
     promises position/altitude/speed/track from OpenSky. Left as "" rather
     than invented, same shape DESIGN.md sec. 8's card documents either way.
     """
-    resp = net.poll(pool, prefs)
-    cands = filters.apply(hero_candidates(resp, prefs["lat"], prefs["lon"]), prefs)
-    c, why = hero.select(cands, time.monotonic())
-    print("hero", why, c["hex"] if c else None)
     if c is None:
         return {"flight": None, "airline": "", "logo": None, "route": "", "type": "",
                 "city": "", "phase": "", "alt": None, "spd": None, "track": None,
@@ -454,6 +448,36 @@ def poll_card():
         "hex": c["hex"],
         "age_s": c["age"],
     }
+
+
+def poll_card():
+    """lib/net.py -> lib/filters.py -> lib/hero.py or lib/cycle.py, assembled
+    into a card dict via _assemble_card().
+
+    Raises whatever lib/net.py's OpenSky fetch raises (httpclient.HTTPStatusError
+    on a non-200, OSError / RuntimeError / TimeoutError / ValueError otherwise) --
+    the caller (the main loop, below) is what turns that into "keep the last
+    good card" per DESIGN.md sec. 8; this function never swallows a failure or
+    guesses at that policy itself. Only call it while link.state == LINK_UP
+    (the main loop already gates poll_card() on that).
+
+    prefs["display_mode"] == "cycle" (issue #20): the main loop only calls this
+    once cyc.ready_for_build() is true (it skips the poll entirely otherwise,
+    rather than fetching and discarding -- better OpenSky rate-limit
+    citizenship for a snapshot that takes up to MAX_CARDS * DWELL_S to rotate
+    through), so build() here is always due. Advancing the rotation the rest
+    of the time (between polls) is refresh_display()'s job, not this
+    function's -- see its docstring.
+    """
+    resp = net.poll(pool, prefs)
+    cands = filters.apply(hero_candidates(resp, prefs["lat"], prefs["lon"]), prefs)
+    if prefs["display_mode"] == "cycle":
+        if cyc.ready_for_build():
+            cyc.build(cands)
+        return _assemble_card(cyc.tick(time.monotonic()))
+    c, why = hero.select(cands, time.monotonic())
+    print("hero", why, c["hex"] if c else None)
+    return _assemble_card(c)
 
 
 last_poll = 0
@@ -476,19 +500,30 @@ def _local_hhmm():
 
 def refresh_display(now):
     """NO LINK once nothing has confirmed data for hero.max_stale_s (issue #27);
-    otherwise render last_card (NO TRAFFIC is just last_card's flight: None
-    case, handled inside Card.show_card()). Using the same max_stale_s
-    lib/hero.py already uses for "is the hero gone" keeps one staleness
-    policy instead of a second timeout invented here -- and, unlike
-    hero.expired() alone, this also covers "never had any data at all"
-    (hero.hex stays None forever) and "OpenSky keeps returning an empty sky
-    successfully" (correctly NOT a link-down state) alike. last_poll_ok_at
-    starts at boot time (not None/never), so the first ~15 s before the
-    first poll completes reads as a grace period, not an instant NO LINK."""
+    otherwise render the current card. Using the same max_stale_s lib/hero.py
+    already uses for "is the hero gone" keeps one staleness policy instead of
+    a second timeout invented here -- and, unlike hero.expired() alone, this
+    also covers "never had any data at all" (hero.hex stays None forever) and
+    "OpenSky keeps returning an empty sky successfully" (correctly NOT a
+    link-down state) alike. last_poll_ok_at starts at boot time (not
+    None/never), so the first ~15 s before the first poll completes reads as
+    a grace period, not an instant NO LINK.
+
+    prefs["display_mode"] == "cycle" (issue #20): called every ~1 s regardless
+    of whether a poll just happened (see the main loop's brightness-throttle
+    block below), so this is what actually advances the rotation between
+    polls -- cyc.tick(now) is the one place DWELL_S elapsing gets noticed.
+    NO TRAFFIC (empty snapshot) falls out of _assemble_card(None)/
+    Card.show_card() the same way hero mode's does, no separate case needed.
+    """
     link_down = now - last_poll_ok_at > hero.max_stale_s
     if link_down:
         card_widget.show_message("NO LINK")
         print("display NO LINK")
+    elif prefs["display_mode"] == "cycle":
+        card = _assemble_card(cyc.tick(now))
+        card_widget.show_card(card, dimmer, _local_hhmm())
+        print("display", card.get("flight") or "NO TRAFFIC")
     elif last_card is None:  # within the boot grace period, first poll not back yet
         card_widget.show_message("NO TRAFFIC", _local_hhmm())
         print("display NO TRAFFIC")
@@ -561,7 +596,8 @@ while True:
             print("brightness", dimmer.level)
         refresh_display(now)  # catches a hero/link going stale between polls
 
-    if online and not sleeping(prefs) and now >= poll_backoff_until and now - last_poll > 15:
+    if online and not sleeping(prefs) and now >= poll_backoff_until and now - last_poll > 15 and (
+            prefs["display_mode"] != "cycle" or cyc.ready_for_build()):
         last_poll = now
         try:
             last_card = poll_card()

@@ -109,7 +109,8 @@ File: `/prefs.json` with `/prefs.bak` on write.
   "tz_offset_min": -360,
   "us_dst": true,
   "api": "https://opensky-network.org/api",
-  "token": ""
+  "token": "",
+  "display_mode": "hero"
 }
 ```
 
@@ -118,6 +119,8 @@ Rules:
 - `nm` is miles **in each direction** (square bbox), clamp 1–50
 - brightness fields 0.0–1.0; day/night clamped to `brightness_max`
 - `night_mode`: `off` | `fixed` | `sunset`
+- `display_mode`: `hero` (one aircraft, hysteresis) | `cycle` (up to 5, 12 s
+  each -- issue #20, sec. 8)
 - sleep and night mode are independent: sleep blanks the panel; night only dims
 - booleans from HTML checkboxes: missing key on POST means `false`
 - JSON POSTs are partial merges: omitted keys (including booleans) keep their stored value; JSON booleans are used as-is
@@ -367,7 +370,7 @@ sketched here):
 2. Apply hide_* filters (`firmware/lib/filters.py:apply()`, on-device, issue #2; a
    filtered-out hero is treated as rule (b), "gone")
 3. Prefer closest to pin; tie-break lower altitude then higher speed
-   (`firmware/lib/hero.py:_rank`)
+   (`firmware/lib/hero.py:rank`)
 4. Enrich hex → type/reg; callsign prefix → airline + badge id (`firmware/lib/enrich.py:lookup()`,
    on-device, issue #2); route cache → OD pair + city + arriving/departing if possible
 5. If enrichment missing, still return callsign + alt + spd
@@ -409,6 +412,42 @@ When there is no current hero, the closest candidate is picked (same
 tie-break as above). Distances are statute miles, matching `firmware/lib/bbox.py`
 (69 mi/degree) and the prefs `nm` field, which despite its name is also miles
 each way.
+
+### Multi-aircraft cycling (issue #20)
+
+`prefs.display_mode` selects between the single-hero behavior above
+(`"hero"`, the default) and cycling through up to 5 of the closest aircraft,
+12 s each (`"cycle"`), via `firmware/lib/cycle.py:Cycle` -- still one card at
+a time, no map view (ruled out explicitly by issue #20).
+
+`Cycle` is deliberately **not** built on `Hero`'s hysteresis: hysteresis
+exists to stop a single shown card from flapping between two
+near-equidistant planes, which has nothing to do once every candidate gets a
+fixed-length turn regardless of rank. The two share only
+`firmware/lib/hero.py:rank()` (closest first, tie-break lower altitude then
+higher speed) and `candidates()`, so both modes pick from the same
+closest-first ordering without two parallel ranking rules to keep in sync.
+
+- **Snapshot, not a live reorder.** Each successful poll's candidates are
+  sorted by `rank()` and the closest `MAX_CARDS` (5) become the rotation for
+  that round; if fewer than 5 candidates exist, the rotation is just
+  whatever is there (no padding or repeats to fill 5 slots).
+- **Refresh only after a full rotation completes**, not on every 15 s poll:
+  a 5-card rotation takes up to 60 s (5 × `DWELL_S`) to show once, so
+  rebuilding the snapshot on every poll would flap the display back to card
+  1 roughly every 15 s and most cards would never be seen. `Cycle.build()`
+  is only called once `Cycle.ready_for_build()` is true (no snapshot yet, or
+  the current one has been shown all the way through and wrapped back to
+  card 1).
+- **The OpenSky poll itself is skipped while mid-rotation**, not fetched and
+  discarded -- `firmware/code.py`'s poll trigger gates on
+  `prefs["display_mode"] != "cycle" or cyc.ready_for_build()`, better
+  citizenship against OpenSky's rate limit than polling every 15 s
+  regardless of whether the result can be used yet.
+- **No candidates** renders the same "NO TRAFFIC" state hero mode uses
+  (`firmware/code.py:_assemble_card(None)`); "NO LINK" staleness is shared
+  between both modes (`refresh_display()`'s `last_poll_ok_at` check is
+  mode-agnostic).
 
 ### Badges (was `GET /v1/logo/{id}`)
 
@@ -587,10 +626,11 @@ need no cache: they are static files already on the drive.
 | `firmware/lib/buttons.py` | hold-to-trigger button helper | exists |
 | `firmware/lib/nyan.py` | easter egg animation | exists |
 | `firmware/lib/hero.py` | hero-aircraft selection + hysteresis (on-device, issue #2) | exists |
+| `firmware/lib/cycle.py` | `prefs.display_mode == "cycle"`: rotate up to 5 closest aircraft, 12 s each (issue #20; §8) | exists |
 | `firmware/lib/enrich.py` | callsign → airline name + badge key/path, on-device (issue #2) | exists |
 | `firmware/lib/filters.py` | on-device hide_heli / hide_mil / hide_ga (issue #2; §10) | exists |
 | `firmware/www/index.html` | settings UI | exists |
-| `firmware/code.py` | matrix, Wi-Fi join / setup-AP fallback, station reconnect watchdog, web UI server (auto-restart), NTP, dimmer schedule; poll_card() wires firmware/lib/net.py → filters → hero → enrich into a real card, refresh_display() renders it / NO TRAFFIC / NO LINK (issues #26, #27) | exists |
+| `firmware/code.py` | matrix, Wi-Fi join / setup-AP fallback, station reconnect watchdog, web UI server (auto-restart), NTP, dimmer schedule; poll_card() wires firmware/lib/net.py → filters → hero (or cycle, by prefs.display_mode) → enrich into a real card via `_assemble_card()`, refresh_display() renders it / NO TRAFFIC / NO LINK (issues #26, #27, #20) | exists |
 | `firmware/lib/linkwatch.py` | station Wi-Fi drop detection, bounded reconnect (6 tries, ~4 min), then hard reset into setup AP | exists |
 | `firmware/lib/httpclient.py` | shared adafruit_requests Session, 4 s timeout, 8 s/32 KB body cap, always-close get_json() for firmware/lib/net.py | exists |
 | `firmware/lib/captiveportal.py` | AP-mode captive-portal DNS responder (issue #21; §7 AP mode) | exists |
@@ -640,6 +680,9 @@ Layout (pixel budget):
 - Outbound HTTP only via `firmware/lib/httpclient.py` (4 s per-socket-op timeout, 8 s body budget, response always closed; worst-case stall ~16 s); keep last good card
 - Skip NTP/poll and `server.poll()` while `LinkWatch` reports the link down
 - Never block the UI server for more than one poll
+- `prefs.display_mode == "cycle"` (issue #20): also skip the poll itself while
+  `firmware/lib/cycle.py:Cycle.ready_for_build()` is false (a rotation is
+  still in progress) -- see §8's "Multi-aircraft cycling" subsection
 
 ## 10. Filters
 
@@ -698,6 +741,7 @@ Do these PRs/slices in order. Each slice must run on hardware or have a clear mo
 6. ~~**Hero selection**~~ — done (issue #9: `firmware/lib/hero.py`)
 7. **AP fallback** — if no Wi-Fi (issue #11, in progress)
 8. ~~**Wire it together**~~ — done (issues #26, #27): `firmware/code.py:poll_card()` calls `firmware/lib/net.py` → `firmware/lib/filters.py` → `firmware/lib/hero.py` → `firmware/lib/enrich.py` and assembles a real card dict; `refresh_display()` renders it (or NO TRAFFIC / NO LINK) through `firmware/lib/card.py`, replacing the old placeholder group entirely.
+9. ~~**Multi-aircraft cycling**~~ — done (issue #20): `firmware/lib/cycle.py:Cycle`, a `prefs.display_mode` toggle, and the ready-for-build poll gate in `firmware/code.py` (§8 "Multi-aircraft cycling")
 
 Do not start a rewrite in ESP-IDF unless CircuitPython HTTPS + HTTP server cannot coexist. If it cannot, port modules 1:1 to Arduino/ESP-IDF and keep this spec.
 
@@ -741,6 +785,8 @@ clock: they check control flow and serial output, not the panel or the radio.
 | `firmware/code.py` real poll wiring: a real state vector becomes a card with the right flight/airline/logo/hex; empty sky → `flight: null`; a 429 backs off past its `Retry-After` (no poll fires early) and keeps the last good card; any other fetch failure also keeps the last good card without crashing the loop; a real aircraft shows on the panel, a brief failure does not flip it to `NO LINK`, a sustained one eventually does (§8, issue #26, #27) | `tests/test_code_poll.py` |
 | `firmware/lib/card.py`: every field renders from a full card dict; empty route/type/city/phase leave their slot blank (no "None"/placeholder text); `city`/`phase` alone (no separator) when only one is set; missing alt/spd/track show `--`; a null-flight card shows `NO TRAFFIC` (+ local time when given) and hides the badge; `show_message()` clears every field; an unchanged badge key skips re-decoding it; a badge swap goes through `Dimmer.set_palette()` (no `_palettes` leak) and is painted at the dimmer's current level immediately, not just on the next brightness change (§9, issue #27) | `tests/test_card.py` |
 | `firmware/lib/dim.py:Dimmer.set_palette()`: replaces the previous registration for the same slot in place instead of appending (no leak across repeated hero swaps), paints the new palette at the current level immediately (§9, issue #27) | `tests/test_dim.py` |
+| `firmware/lib/cycle.py:Cycle`: `build()` sorts to the closest `MAX_CARDS` by `hero.rank()`, restarting the rotation; fewer than 5 candidates cycles through only what exists, no padding; `tick()` holds each card `DWELL_S` then advances, wrapping back to card 1; `ready_for_build()` is true only once a snapshot is absent or has been shown all the way through (§8, issue #20) | `tests/test_cycle.py` |
+| `firmware/code.py` in `display_mode: "cycle"`: candidates rotate closest-first through up to 5 cards at `DWELL_S` each and wrap back to the first; the OpenSky poll itself is skipped (not just discarded) while a rotation is still in progress, so a 3-candidate (36 s) rotation makes only 2 poll calls in 60 s, not 4; an empty sky still shows `NO TRAFFIC`, not a crash (§8, §9, issue #20) | `tests/test_code_cycle.py` |
 
 ### 13.3 Manual, on hardware only
 
@@ -791,6 +837,7 @@ firmware/lib/filters.py       # new (issue #2: on-device heli/mil/ga filters)
 firmware/lib/logos/*.bmp       # new, generated (issue #2: on-device badges, not fetched;
                        #   issue #18: real logo where sourced, else letter-mark)
 firmware/lib/card.py          # new (issue #27)
+firmware/lib/cycle.py         # new (issue #20: display_mode "cycle" multi-aircraft rotation)
 firmware/lib/net.py           # new (issue #26)
 firmware/lib/wifisettings.py  # new (issue #11: AP-mode settings.toml Wi-Fi writer)
 firmware/lib/setupscreen.py   # new (issue #11: panel setup-AP credentials screen)
@@ -820,6 +867,8 @@ tests/test_captiveportal.py     # host-only (issue #21: CaptiveDNS._build wire f
 tests/test_net.py               # host-only (issue #26: firmware/lib/net.py URL/auth/error propagation)
 tests/test_code_poll.py         # host-only (issues #26/#27: firmware/code.py sim, real net -> filters -> hero -> enrich -> display wiring)
 tests/test_card.py              # host-only (issue #27: firmware/lib/card.py rendering)
+tests/test_cycle.py             # host-only (issue #20: firmware/lib/cycle.py rotation logic)
+tests/test_code_cycle.py        # host-only (issue #20: firmware/code.py sim, cycle-mode rotation + poll gating)
 firmware/lib/reqguard.py      # new (issue #14: same-origin/CSRF guard)
 DESIGN.md            # this file
 README.md

@@ -28,6 +28,12 @@ h1{font-size:1.2rem}
 <label>Longitude</label><input name="lon" id="lon" step="any"/>
 <label>Box (miles each way)</label><input name="nm" id="nm" type="number" min="1" max="50" step="0.5"/>
 
+<h2>Display</h2>
+<select name="display_mode" id="display_mode">
+  <option value="hero">One aircraft (closest, held until something closer appears)</option>
+  <option value="cycle">Cycle through up to 5, 12 s each</option>
+</select>
+
 <h2>Filters</h2>
 <div class="check"><input type="checkbox" name="hide_heli" id="hide_heli" value="1"/><span>Hide helicopters</span></div>
 <div class="check"><input type="checkbox" name="hide_ga" id="hide_ga" value="1"/><span>Hide general aviation</span></div>
