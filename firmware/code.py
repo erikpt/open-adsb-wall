@@ -16,6 +16,7 @@ from adafruit_httpserver import Server, Request, Response, Status, GET, POST, Re
 from prefs import load, apply_form, public
 from urldecode import unquote_plus
 from schedule import sleeping, brightness, set_clock_synced, clock_synced, clock_trusted
+from tz import local_minutes
 from dim import Dimmer, min_visible
 import wifisettings
 import httpclient
@@ -24,6 +25,7 @@ import net
 import filters
 import enrich
 from hero import Hero, candidates as hero_candidates
+from card import Card
 from captiveportal import CaptiveDNS
 from linkwatch import LinkWatch, UP as LINK_UP
 
@@ -56,40 +58,10 @@ matrix = rgbmatrix.RGBMatrix(
 )
 display = framebufferio.FramebufferDisplay(matrix, auto_refresh=True)
 
-# Placeholder content until lib/card.py exists: a 1 px white frame plus
-# white / gray / amber bars, all drawn through one palette so the dimmer can
-# rescale it. Deliberately sparse -- a full-white panel is ~15 W.
-PLACEHOLDER_COLORS = (
-    0x000000,  # 0 background
-    0xFFFFFF,  # 1 white (frame + top bar): card text
-    0x999999,  # 2 gray (middle bar): card labels
-    0xFF7900,  # 3 amber (bottom bar): accent
-)
-
-
-def _make_placeholder():
-    w, h = display.width, display.height
-    bmp = displayio.Bitmap(w, h, len(PLACEHOLDER_COLORS))
-    for x in range(w):
-        bmp[x, 0] = 1
-        bmp[x, h - 1] = 1
-    for y in range(h):
-        bmp[0, y] = 1
-        bmp[w - 1, y] = 1
-    for idx, y0 in ((1, 14), (2, 29), (3, 44)):
-        for y in range(y0, y0 + 6):
-            for x in range(8, w - 8):
-                bmp[x, y] = idx
-    pal = displayio.Palette(len(PLACEHOLDER_COLORS))
-    group = displayio.Group()
-    group.append(displayio.TileGrid(bmp, pixel_shader=pal))
-    return group, pal
-
-
-placeholder_group, placeholder_pal = _make_placeholder()
-display.root_group = placeholder_group
-dimmer = Dimmer(display, placeholder_group, displayio.Group(), floor=min_visible(BIT_DEPTH))
-dimmer.add_palette(placeholder_pal, PLACEHOLDER_COLORS)
+card_widget = Card()  # issue #27: owns the real card's displayio.Group
+display.root_group = card_widget.group
+dimmer = Dimmer(display, card_widget.group, displayio.Group(), floor=min_visible(BIT_DEPTH))
+card_widget.show_message("NO TRAFFIC")  # shown until the first poll completes
 
 prefs = load()
 dimmer.apply(brightness(prefs))
@@ -439,6 +411,9 @@ def restart_http(why):
 
 hero = Hero(poll_s=15)  # DESIGN.md sec. 8: on-device hero selection (issue #2)
 
+M_TO_FT = 3.280840    # OpenSky altitude is meters; the card shape is feet (DESIGN.md sec. 8)
+MPS_TO_KT = 1.943844  # OpenSky velocity is m/s; the card shape is knots (DESIGN.md sec. 8)
+
 
 def poll_card():
     """lib/net.py -> lib/filters.py -> lib/hero.py, assembled into a card dict.
@@ -473,8 +448,8 @@ def poll_card():
         "type": "",
         "city": "",
         "phase": "",
-        "alt": c["alt"],
-        "spd": c["spd"],
+        "alt": None if c["alt"] is None else c["alt"] * M_TO_FT,
+        "spd": None if c["spd"] is None else c["spd"] * MPS_TO_KT,
         "track": c["trk"],
         "hex": c["hex"],
         "age_s": c["age"],
@@ -484,8 +459,42 @@ def poll_card():
 last_poll = 0
 poll_backoff_until = 0   # monotonic deadline; set past a 429's Retry-After
 last_card = None         # last successfully assembled card (kept across failed polls)
+last_poll_ok_at = time.monotonic()  # last successful poll_card(); starts "now" for a boot grace period
 last_bright = 0
 last_ntp_try = time.monotonic()
+
+
+def _local_hhmm():
+    """"HH:MM" for DESIGN.md sec. 9's "NO TRAFFIC + local time", or None if
+    the clock isn't trusted yet (schedule.clock_trusted()) -- an untrusted
+    clock showing a wrong/epoch time would be worse than showing none."""
+    if not clock_trusted():
+        return None
+    h, m = divmod(local_minutes(prefs["tz_offset_min"], prefs["us_dst"]), 60)
+    return "%02d:%02d" % (h, m)
+
+
+def refresh_display(now):
+    """NO LINK once nothing has confirmed data for hero.max_stale_s (issue #27);
+    otherwise render last_card (NO TRAFFIC is just last_card's flight: None
+    case, handled inside Card.show_card()). Using the same max_stale_s
+    lib/hero.py already uses for "is the hero gone" keeps one staleness
+    policy instead of a second timeout invented here -- and, unlike
+    hero.expired() alone, this also covers "never had any data at all"
+    (hero.hex stays None forever) and "OpenSky keeps returning an empty sky
+    successfully" (correctly NOT a link-down state) alike. last_poll_ok_at
+    starts at boot time (not None/never), so the first ~15 s before the
+    first poll completes reads as a grace period, not an instant NO LINK."""
+    link_down = now - last_poll_ok_at > hero.max_stale_s
+    if link_down:
+        card_widget.show_message("NO LINK")
+        print("display NO LINK")
+    elif last_card is None:  # within the boot grace period, first poll not back yet
+        card_widget.show_message("NO TRAFFIC", _local_hhmm())
+        print("display NO TRAFFIC")
+    else:
+        card_widget.show_card(last_card, dimmer, _local_hhmm())
+        print("display", last_card.get("flight") or "NO TRAFFIC")
 while True:
     # Skip while the station link is down: nothing can reach the UI, and a
     # dead listening socket would otherwise log an error every pass.
@@ -550,12 +559,15 @@ while True:
         last_bright = now
         if dimmer.apply(brightness(prefs)):
             print("brightness", dimmer.level)
+        refresh_display(now)  # catches a hero/link going stale between polls
 
     if online and not sleeping(prefs) and now >= poll_backoff_until and now - last_poll > 15:
         last_poll = now
         try:
             last_card = poll_card()
+            last_poll_ok_at = now
             print(last_card)
+            refresh_display(now)
         except httpclient.HTTPStatusError as e:
             if e.retry_after:
                 poll_backoff_until = now + e.retry_after
