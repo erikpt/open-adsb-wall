@@ -39,6 +39,7 @@ class World:
         self.dns_sent = []       # [(bytes, addr)] captured from CaptiveDNS.sendto
         self.dns_socket = None   # the most recently created fake UDP socket
         self.routes = []         # [(path, method)] registered via Server.route
+        self.buttons = {}       # pin name -> the fake DigitalInOut created for it
 
 
 W = World()
@@ -82,7 +83,23 @@ def fake_modules():
 
     mod("board", **{n: object() for n in (
         "MTX_R1 MTX_G1 MTX_B1 MTX_R2 MTX_G2 MTX_B2 MTX_ADDRA MTX_ADDRB "
-        "MTX_ADDRC MTX_ADDRD MTX_ADDRE MTX_CLK MTX_LAT MTX_OE").split()})
+        "MTX_ADDRC MTX_ADDRD MTX_ADDRE MTX_CLK MTX_LAT MTX_OE").split()},
+        BUTTON_UP="BUTTON_UP", BUTTON_DOWN="BUTTON_DOWN")
+
+    # issue #30: lib/buttons.py:HoldButton's digitalio.DigitalInOut, faked so
+    # a test can flip W.buttons["BUTTON_UP"/"BUTTON_DOWN"].value to simulate
+    # a press (active-low, matching the real pulled-up pin).
+    class DigitalInOut:
+        def __init__(self, pin):
+            self.pin = pin
+            self.direction = None
+            self.pull = None
+            self.value = True  # unpressed
+            W.buttons[pin] = self
+
+    mod("digitalio", DigitalInOut=DigitalInOut,
+        Direction=type("Direction", (), {"INPUT": "input"}),
+        Pull=type("Pull", (), {"UP": "up"}))
 
     def reset():
         W.resets.append(W.t)

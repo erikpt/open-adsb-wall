@@ -41,20 +41,30 @@ def _url_host(url):
     return _norm_host(u)
 
 
-def check(host_hdr, origin, referer, host, write):
-    """None if allowed, else a short reason (for the 403 body and serial log)."""
+def check(host_hdr, origin, referer, host, write, extra_host=None):
+    """None if allowed, else a short reason (for the 403 body and serial log).
+
+    extra_host (issue #31): the device's own mDNS hostname (e.g.
+    "tailwatch-ab12.local"), accepted alongside its IP -- a page loaded via
+    that hostname sends it as Host, and as the authority in Origin/Referer
+    on a POST, so both checks must allow it too, not just the IP form.
+    """
     me = _norm_host(host)
     if me is None:
         return "device host unknown"
-    if _norm_host(host_hdr) != me:
+    mine = {me}
+    extra = _norm_host(extra_host)
+    if extra:
+        mine.add(extra)
+    if _norm_host(host_hdr) not in mine:
         return "Host %r is not this device" % (host_hdr,)
     if not write:
         return None
     if origin is not None:
-        if _url_host(origin) != me:
+        if _url_host(origin) not in mine:
             return "cross-site Origin %r" % (origin,)
         return None
     if referer:
-        if _url_host(referer) != me:
+        if _url_host(referer) not in mine:
             return "cross-site Referer %r" % (referer,)
     return None

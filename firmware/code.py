@@ -25,9 +25,14 @@ import net
 import filters
 import enrich
 from hero import Hero, candidates as hero_candidates
+from cycle import Cycle
 from card import Card
+from mdnsadv import Advertiser
 from captiveportal import CaptiveDNS
 from linkwatch import LinkWatch, UP as LINK_UP
+from buttons import HoldButton
+import badapple
+import ota
 
 displayio.release_displays()
 
@@ -79,6 +84,15 @@ NTP_RESYNC_S = 86400         # station mode, daily re-sync for RTC drift
 HTTP_FAIL_LIMIT = 5          # consecutive server.poll() exceptions -> restart the server
 HTTP_RETRY_S = 30            # server failed to start: retry this often
 PW_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"  # 32 chars, no l/o/0/1
+
+
+def device_suffix():
+    """4 lowercase hex chars from the radio MAC -- same scheme as
+    start_setup_ap()'s "TailWatch-XXXX" AP SSID, so a unit's mDNS hostname
+    (issue #31) and its setup-AP name agree. Two units on the same LAN
+    (DESIGN.md sec. 5) can't both answer to a bare "tailwatch.local"."""
+    mac = wifi.radio.mac_address
+    return "%02x%02x" % (mac[-2], mac[-1])
 
 
 def join_station():
@@ -148,6 +162,7 @@ def show_setup_screen(lines):
 
 
 wifisettings.recover()  # finish an interrupted settings.toml swap before reading it
+ota.recover()  # finish an interrupted OTA file swap before anything it might have touched loads (issue #29)
 sta_ok, cfg_ssid = join_station()
 ap_mode = not sta_ok
 ap_ssid = ""
@@ -229,9 +244,14 @@ def _json(request, obj, code=200, reason="OK"):
 
 def _guard(request, write):
     """403 Response if the request isn't same-origin for this device, else None.
-    Reads the global `host`, so it follows LinkWatch IP changes and AP mode."""
+    Reads the global `host`, so it follows LinkWatch IP changes and AP mode.
+    Also accepts the device's own mDNS hostname (issue #31) when it's
+    running -- `mdns_adv` is station-mode only and stays None in AP mode, so
+    a page reached that way never gets an extra_host to match against."""
     h = request.headers  # adafruit_httpserver Headers: case-insensitive .get
-    why = reqguard.check(h.get("Host"), h.get("Origin"), h.get("Referer"), host, write)
+    extra = mdns_adv.hostname + ".local" if mdns_adv is not None else None
+    why = reqguard.check(h.get("Host"), h.get("Origin"), h.get("Referer"), host, write,
+                          extra_host=extra)
     if why is None:
         return None
     print("api 403:", why)
@@ -346,6 +366,92 @@ def post_wifi(request: Request):
     return _json(request, {"ok": True, "ssid": ssid, "rebooting": True})
 
 
+def _ota_url(request):
+    """{"url": "https://..."} JSON body -> the url string, or None (+ a 400
+    Response already built) if the body is missing/malformed. Query-string
+    args are skipped on purpose, same reasoning as post_wifi's include_query
+    =False -- a manifest URL doesn't belong in a log/URL history either."""
+    form, _ = _read_form(request, include_query=False)
+    if form is None:
+        return None, _json(request, {"error": "invalid JSON body"}, 400, "Bad Request")
+    url = form.get("url")
+    if not isinstance(url, str) or not url.lower().startswith("https://"):
+        return None, _json(request, {"error": "url must be https://"}, 400, "Bad Request")
+    return url, None
+
+
+def post_ota_check(request: Request):
+    """{"url": manifest url} -> fetch + validate it, report version/files,
+    apply nothing. issue #29: lets the owner see what an update contains
+    before committing to post_ota_apply."""
+    bad = _guard(request, True)  # a POST that makes the device fetch an owner-given
+    if bad:                      # URL is exactly the SSRF-via-CSRF shape reqguard.py
+        return bad                # exists to block, so this is write=True like any POST
+    _touch()
+    url, bad = _ota_url(request)
+    if bad:
+        return bad
+    try:
+        m = ota.fetch_manifest(pool, url)
+    except ota.OTAError as e:
+        return _json(request, {"error": str(e)}, 400, "Bad Request")
+    except Exception as e:
+        print("ota check failed", e)
+        return _json(request, {"error": "fetch failed: %s" % e}, 502, "Bad Gateway")
+    files = [{"path": f["path"], "size": f["size"]} for f in m["files"]]
+    return _json(request, {"ok": True, "version": m["version"], "files": files})
+
+
+def post_ota_apply(request: Request):
+    """{"url": manifest url} -> re-fetch + apply it, then hard reset.
+    Always re-fetches rather than trusting a prior post_ota_check response:
+    the manifest could have changed, and this is the one call that actually
+    writes to the filesystem, so it verifies for itself."""
+    global reset_at
+    bad = _guard(request, True)
+    if bad:
+        return bad
+    _touch()
+    url, bad = _ota_url(request)
+    if bad:
+        return bad
+    try:
+        m = ota.fetch_manifest(pool, url)
+        version = ota.apply(pool, m)
+    except ota.OTAError as e:
+        return _json(request, {"error": str(e)}, 400, "Bad Request")
+    except OSError as e:
+        print("ota apply failed", e)
+        return _json(request, {"error": "CIRCUITPY read-only (booted with UP held?)"},
+                     503, "Service Unavailable")
+    except Exception as e:
+        print("ota apply failed", e)
+        return _json(request, {"error": "update failed: %s" % e}, 502, "Bad Gateway")
+    print("ota applied", version, "- hard reset in", RESET_DELAY_S, "s")
+    reset_at = time.monotonic() + RESET_DELAY_S
+    return _json(request, {"ok": True, "version": version, "rebooting": True})
+
+
+def post_ota_rollback(request: Request):
+    """Restore the last applied update's backed-up files, then hard reset."""
+    global reset_at
+    bad = _guard(request, True)
+    if bad:
+        return bad
+    _touch()
+    try:
+        restored = ota.rollback()
+    except ota.OTAError as e:
+        return _json(request, {"error": str(e)}, 400, "Bad Request")
+    except OSError as e:
+        print("ota rollback failed", e)
+        return _json(request, {"error": "CIRCUITPY read-only (booted with UP held?)"},
+                     503, "Service Unavailable")
+    print("ota rolled back", restored, "- hard reset in", RESET_DELAY_S, "s")
+    reset_at = time.monotonic() + RESET_DELAY_S
+    return _json(request, {"ok": True, "restored": restored, "rebooting": True})
+
+
 # AP mode only (issue #21): known captive-portal detection probe paths.
 # Each OS expects a specific exact response (Android: 204 + empty body,
 # Apple: 200 + one exact HTML string, Windows: specific plain-text bodies)
@@ -377,6 +483,9 @@ def start_http():
         srv.route("/api/prefs", POST)(post_prefs)
         srv.route("/api/status", GET)(get_status)
         srv.route("/api/wifi", POST)(post_wifi)
+        srv.route("/api/ota/check", POST)(post_ota_check)
+        srv.route("/api/ota/apply", POST)(post_ota_apply)
+        srv.route("/api/ota/rollback", POST)(post_ota_rollback)
         if ap_mode:
             for p in CAPTIVE_CHECK_PATHS:
                 srv.route(p, GET)(captive_redirect)
@@ -391,6 +500,15 @@ def start_http():
 server = start_http()
 http_fails = 0                  # consecutive server.poll() exceptions
 last_http_try = time.monotonic()
+
+# Station mode only (issue #31): AP mode's captive-portal onboarding has no
+# use for a hostname, and two units on the same LAN must not both answer to
+# the same name (DESIGN.md sec. 5) -- device_suffix() gives each its own.
+mdns_adv = None
+if not ap_mode:
+    mdns_adv = Advertiser(wifi.radio, "tailwatch-" + device_suffix())
+    if mdns_adv.start():
+        print("ui http://%s.local/" % mdns_adv.hostname)
 
 
 def restart_http(why):
@@ -410,20 +528,28 @@ def restart_http(why):
 
 
 hero = Hero(poll_s=15)  # DESIGN.md sec. 8: on-device hero selection (issue #2)
+cyc = Cycle()           # prefs["display_mode"] == "cycle": up to 5 jets, 12 s each (issue #20)
+
+# Easter egg trigger (issue #30: hold UP 5s plays Bad Apple; lib/nyan.py's
+# Nyan Cat, hold DOWN 5s, predates this and stays as-is -- not wired here).
+# A DigitalInOut failure (pin already claimed, etc.) just means the egg never
+# triggers, not a reason to fail the rest of bring-up.
+up_button = None
+badapple_player = badapple.Player()
+try:
+    up_button = HoldButton(board.BUTTON_UP, hold_s=5.0)
+except Exception as e:
+    print("badapple: button init failed,", e)
 
 M_TO_FT = 3.280840    # OpenSky altitude is meters; the card shape is feet (DESIGN.md sec. 8)
 MPS_TO_KT = 1.943844  # OpenSky velocity is m/s; the card shape is knots (DESIGN.md sec. 8)
 
 
-def poll_card():
-    """lib/net.py -> lib/filters.py -> lib/hero.py, assembled into a card dict.
+def _assemble_card(c):
+    """lib/hero.py:candidates() dict (or None) -> the card dict lib/card.py renders.
 
-    Raises whatever lib/net.py's OpenSky fetch raises (httpclient.HTTPStatusError
-    on a non-200, OSError / RuntimeError / TimeoutError / ValueError otherwise) --
-    the caller (the main loop, below) is what turns that into "keep the last
-    good card" per DESIGN.md sec. 8; this function never swallows a failure or
-    guesses at that policy itself. Only call it while link.state == LINK_UP
-    (the main loop already gates poll_card() on that).
+    Shared by both display_mode paths (issue #20): hero mode hands this
+    hero.select()'s pick, cycle mode hands this lib/cycle.py:Cycle.tick()'s.
 
     route/type/city/phase are not populated: nothing on-device (no cloud tier,
     issue #2) currently supplies flight-route, aircraft-type, or airport/phase
@@ -431,10 +557,6 @@ def poll_card():
     promises position/altitude/speed/track from OpenSky. Left as "" rather
     than invented, same shape DESIGN.md sec. 8's card documents either way.
     """
-    resp = net.poll(pool, prefs)
-    cands = filters.apply(hero_candidates(resp, prefs["lat"], prefs["lon"]), prefs)
-    c, why = hero.select(cands, time.monotonic())
-    print("hero", why, c["hex"] if c else None)
     if c is None:
         return {"flight": None, "airline": "", "logo": None, "route": "", "type": "",
                 "city": "", "phase": "", "alt": None, "spd": None, "track": None,
@@ -454,6 +576,36 @@ def poll_card():
         "hex": c["hex"],
         "age_s": c["age"],
     }
+
+
+def poll_card():
+    """lib/net.py -> lib/filters.py -> lib/hero.py or lib/cycle.py, assembled
+    into a card dict via _assemble_card().
+
+    Raises whatever lib/net.py's OpenSky fetch raises (httpclient.HTTPStatusError
+    on a non-200, OSError / RuntimeError / TimeoutError / ValueError otherwise) --
+    the caller (the main loop, below) is what turns that into "keep the last
+    good card" per DESIGN.md sec. 8; this function never swallows a failure or
+    guesses at that policy itself. Only call it while link.state == LINK_UP
+    (the main loop already gates poll_card() on that).
+
+    prefs["display_mode"] == "cycle" (issue #20): the main loop only calls this
+    once cyc.ready_for_build() is true (it skips the poll entirely otherwise,
+    rather than fetching and discarding -- better OpenSky rate-limit
+    citizenship for a snapshot that takes up to MAX_CARDS * DWELL_S to rotate
+    through), so build() here is always due. Advancing the rotation the rest
+    of the time (between polls) is refresh_display()'s job, not this
+    function's -- see its docstring.
+    """
+    resp = net.poll(pool, prefs)
+    cands = filters.apply(hero_candidates(resp, prefs["lat"], prefs["lon"]), prefs)
+    if prefs["display_mode"] == "cycle":
+        if cyc.ready_for_build():
+            cyc.build(cands)
+        return _assemble_card(cyc.tick(time.monotonic()))
+    c, why = hero.select(cands, time.monotonic())
+    print("hero", why, c["hex"] if c else None)
+    return _assemble_card(c)
 
 
 last_poll = 0
@@ -476,19 +628,38 @@ def _local_hhmm():
 
 def refresh_display(now):
     """NO LINK once nothing has confirmed data for hero.max_stale_s (issue #27);
-    otherwise render last_card (NO TRAFFIC is just last_card's flight: None
-    case, handled inside Card.show_card()). Using the same max_stale_s
-    lib/hero.py already uses for "is the hero gone" keeps one staleness
-    policy instead of a second timeout invented here -- and, unlike
-    hero.expired() alone, this also covers "never had any data at all"
-    (hero.hex stays None forever) and "OpenSky keeps returning an empty sky
-    successfully" (correctly NOT a link-down state) alike. last_poll_ok_at
-    starts at boot time (not None/never), so the first ~15 s before the
-    first poll completes reads as a grace period, not an instant NO LINK."""
+    otherwise render the current card. Using the same max_stale_s lib/hero.py
+    already uses for "is the hero gone" keeps one staleness policy instead of
+    a second timeout invented here -- and, unlike hero.expired() alone, this
+    also covers "never had any data at all" (hero.hex stays None forever) and
+    "OpenSky keeps returning an empty sky successfully" (correctly NOT a
+    link-down state) alike. last_poll_ok_at starts at boot time (not
+    None/never), so the first ~15 s before the first poll completes reads as
+    a grace period, not an instant NO LINK.
+
+    prefs["display_mode"] == "cycle" (issue #20): called every ~1 s regardless
+    of whether a poll just happened (see the main loop's brightness-throttle
+    block below), so this is what actually advances the rotation between
+    polls -- cyc.tick(now) is the one place DWELL_S elapsing gets noticed.
+    NO TRAFFIC (empty snapshot) falls out of _assemble_card(None)/
+    Card.show_card() the same way hero mode's does, no separate case needed.
+
+    Issue #30: a no-op while badapple_player owns display.root_group/
+    brightness -- the main loop skips calling this at all while it's
+    active, but a stray caller (or a leftover scheduled call) must not
+    stomp the egg's own display state either, so this is the one guard
+    point for both.
+    """
+    if badapple_player.active:
+        return
     link_down = now - last_poll_ok_at > hero.max_stale_s
     if link_down:
         card_widget.show_message("NO LINK")
         print("display NO LINK")
+    elif prefs["display_mode"] == "cycle":
+        card = _assemble_card(cyc.tick(now))
+        card_widget.show_card(card, dimmer, _local_hhmm())
+        print("display", card.get("flight") or "NO TRAFFIC")
     elif last_card is None:  # within the boot grace period, first poll not back yet
         card_widget.show_message("NO TRAFFIC", _local_hhmm())
         print("display NO TRAFFIC")
@@ -512,6 +683,24 @@ while True:
     if reset_at is not None and now >= reset_at:
         microcontroller.reset()  # hard reset: boot.py + settings.toml re-read, fresh radio
 
+    # Easter egg (issue #30): tick() decodes at most one frame per call, so
+    # this never adds a multi-second stall here the way a single blocking
+    # play() loop would -- server.poll()/link.tick()/the ADS-B poll above and
+    # below all keep running every iteration regardless of badapple_player.active.
+    if up_button is not None:
+        up_triggered = up_button.poll()
+        if badapple_player.active:
+            if up_triggered:
+                print("badapple: stop (repeat trigger)")
+                badapple_player.stop()
+        elif up_triggered:
+            print("badapple: start")
+            badapple_player.start(display)
+    if badapple_player.active:
+        badapple_player.tick(now)
+        if not badapple_player.active:
+            print("badapple: stop (clip ended)")
+
     if server is None and now - last_http_try >= HTTP_RETRY_S and (
             link is None or link.state == LINK_UP):
         restart_http("not running")
@@ -521,10 +710,14 @@ while True:
         if ev is not None:
             if ev[0] == "down":
                 httpclient.reset()  # pooled outbound sockets died with the link
+                if mdns_adv is not None:
+                    mdns_adv.stop()  # don't keep answering queries while actually down
             elif ev[0] == "up":
                 host = ev[2]
                 httpclient.reset()
                 restart_http("wifi up" if ev[1] == ev[2] else "ip %s -> %s" % (ev[1], ev[2]))
+                if mdns_adv is not None:
+                    mdns_adv.start()
                 if not clock_synced():
                     last_ntp_try = now - NTP_RETRY_S  # retry NTP now, not in up to 5 min
             elif ev[0] == "reset":
@@ -557,11 +750,13 @@ while True:
     # immediately, so the throttle never delays a slider change.
     if now - last_bright >= 1.0:
         last_bright = now
-        if dimmer.apply(brightness(prefs)):
-            print("brightness", dimmer.level)
-        refresh_display(now)  # catches a hero/link going stale between polls
+        if not badapple_player.active:  # issue #30: the egg owns display.brightness meanwhile
+            if dimmer.apply(brightness(prefs)):
+                print("brightness", dimmer.level)
+            refresh_display(now)  # catches a hero/link going stale between polls
 
-    if online and not sleeping(prefs) and now >= poll_backoff_until and now - last_poll > 15:
+    if online and not sleeping(prefs) and now >= poll_backoff_until and now - last_poll > 15 and (
+            prefs["display_mode"] != "cycle" or cyc.ready_for_build()):
         last_poll = now
         try:
             last_card = poll_card()
