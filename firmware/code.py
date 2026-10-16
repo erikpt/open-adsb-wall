@@ -30,6 +30,8 @@ from card import Card
 from mdnsadv import Advertiser
 from captiveportal import CaptiveDNS
 from linkwatch import LinkWatch, UP as LINK_UP
+from buttons import HoldButton
+import badapple
 
 displayio.release_displays()
 
@@ -437,6 +439,17 @@ def restart_http(why):
 hero = Hero(poll_s=15)  # DESIGN.md sec. 8: on-device hero selection (issue #2)
 cyc = Cycle()           # prefs["display_mode"] == "cycle": up to 5 jets, 12 s each (issue #20)
 
+# Easter egg trigger (issue #30: hold UP 5s plays Bad Apple; lib/nyan.py's
+# Nyan Cat, hold DOWN 5s, predates this and stays as-is -- not wired here).
+# A DigitalInOut failure (pin already claimed, etc.) just means the egg never
+# triggers, not a reason to fail the rest of bring-up.
+up_button = None
+badapple_player = badapple.Player()
+try:
+    up_button = HoldButton(board.BUTTON_UP, hold_s=5.0)
+except Exception as e:
+    print("badapple: button init failed,", e)
+
 M_TO_FT = 3.280840    # OpenSky altitude is meters; the card shape is feet (DESIGN.md sec. 8)
 MPS_TO_KT = 1.943844  # OpenSky velocity is m/s; the card shape is knots (DESIGN.md sec. 8)
 
@@ -539,7 +552,15 @@ def refresh_display(now):
     polls -- cyc.tick(now) is the one place DWELL_S elapsing gets noticed.
     NO TRAFFIC (empty snapshot) falls out of _assemble_card(None)/
     Card.show_card() the same way hero mode's does, no separate case needed.
+
+    Issue #30: a no-op while badapple_player owns display.root_group/
+    brightness -- the main loop skips calling this at all while it's
+    active, but a stray caller (or a leftover scheduled call) must not
+    stomp the egg's own display state either, so this is the one guard
+    point for both.
     """
+    if badapple_player.active:
+        return
     link_down = now - last_poll_ok_at > hero.max_stale_s
     if link_down:
         card_widget.show_message("NO LINK")
@@ -570,6 +591,24 @@ while True:
     now = time.monotonic()
     if reset_at is not None and now >= reset_at:
         microcontroller.reset()  # hard reset: boot.py + settings.toml re-read, fresh radio
+
+    # Easter egg (issue #30): tick() decodes at most one frame per call, so
+    # this never adds a multi-second stall here the way a single blocking
+    # play() loop would -- server.poll()/link.tick()/the ADS-B poll above and
+    # below all keep running every iteration regardless of badapple_player.active.
+    if up_button is not None:
+        up_triggered = up_button.poll()
+        if badapple_player.active:
+            if up_triggered:
+                print("badapple: stop (repeat trigger)")
+                badapple_player.stop()
+        elif up_triggered:
+            print("badapple: start")
+            badapple_player.start(display)
+    if badapple_player.active:
+        badapple_player.tick(now)
+        if not badapple_player.active:
+            print("badapple: stop (clip ended)")
 
     if server is None and now - last_http_try >= HTTP_RETRY_S and (
             link is None or link.state == LINK_UP):
@@ -620,9 +659,10 @@ while True:
     # immediately, so the throttle never delays a slider change.
     if now - last_bright >= 1.0:
         last_bright = now
-        if dimmer.apply(brightness(prefs)):
-            print("brightness", dimmer.level)
-        refresh_display(now)  # catches a hero/link going stale between polls
+        if not badapple_player.active:  # issue #30: the egg owns display.brightness meanwhile
+            if dimmer.apply(brightness(prefs)):
+                print("brightness", dimmer.level)
+            refresh_display(now)  # catches a hero/link going stale between polls
 
     if online and not sleeping(prefs) and now >= poll_backoff_until and now - last_poll > 15 and (
             prefs["display_mode"] != "cycle" or cyc.ready_for_build()):

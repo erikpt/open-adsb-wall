@@ -630,7 +630,9 @@ need no cache: they are static files already on the drive.
 | `firmware/lib/tz.py` | UTC offset + fixed US DST rule | exists |
 | `firmware/lib/urldecode.py` | percent-decode form bodies | exists |
 | `firmware/lib/buttons.py` | hold-to-trigger button helper | exists |
-| `firmware/lib/nyan.py` | easter egg animation | exists |
+| `firmware/lib/nyan.py` | Nyan Cat easter egg animation (hold DOWN 5 s) -- **not wired into `firmware/code.py`** | exists |
+| `firmware/lib/badapple.py` | Bad Apple!! easter egg (hold UP 5 s, issue #30): cooperative `Player.tick()`, non-blocking | exists |
+| `firmware/lib/badapple_frames.py` | generated RLE frame data for `badapple.py` (issue #30; `tools/gen_badapple.py`) | exists |
 | `firmware/lib/hero.py` | hero-aircraft selection + hysteresis (on-device, issue #2) | exists |
 | `firmware/lib/cycle.py` | `prefs.display_mode == "cycle"`: rotate up to 5 closest aircraft, 12 s each (issue #20; §8) | exists |
 | `firmware/lib/enrich.py` | callsign → airline name + badge key/path, on-device (issue #2) | exists |
@@ -691,6 +693,56 @@ Layout (pixel budget):
   `firmware/lib/cycle.py:Cycle.ready_for_build()` is false (a rotation is
   still in progress) -- see §8's "Multi-aircraft cycling" subsection
 
+### Easter eggs
+
+Two, both triggered by a 5 s button hold (`firmware/lib/buttons.py:HoldButton`,
+active-low, release required before it fires again):
+
+- **Nyan Cat** (hold DOWN) -- `firmware/lib/nyan.py:play()`, the original
+  easter egg. A single blocking `while` loop: swaps in its own bitmap/group,
+  runs for up to `duration_s` (default 90 s), then restores the prior
+  root_group/brightness. **Not wired into `firmware/code.py`** -- calling it
+  as-is would stall the HTTP server and ADS-B poll for its whole run,
+  violating this section's "never block the UI server for more than one
+  poll" rule, and fixing that wasn't in scope when badapple.py's cooperative
+  pattern (below) was built. Rewiring it the same way `badapple.py` is wired
+  is a reasonable follow-up, not done here.
+- **Bad Apple!!** (hold UP, issue #30) -- `firmware/lib/badapple.py:Player`.
+  Cooperative instead of blocking: one instance lives for the whole run (same
+  shape as `Hero`/`Cycle`), `start()` swaps in its own bitmap/group the same
+  way `nyan.play()` does, and `tick(now)` -- called once per main-loop
+  iteration while `Player.active`, never in its own loop -- decodes at most
+  one new frame, paced by the clip's own fps, and restores the prior
+  root_group/brightness itself once the clip ends. `firmware/code.py` only
+  ever calls `tick()` from the main loop, so `server.poll()`/`LinkWatch`/the
+  ADS-B poll all keep running every iteration during playback, satisfying
+  this section's non-blocking rule. A repeat trigger (hold UP 5 s again
+  while already playing) calls `stop()` to end it early instead of starting
+  a second overlapping playback.
+  - **Clip**: 24 s (288 frames at 12 fps) of the "Shadow Animation Version"
+    (nomico / Alstroemeria Records), picked for being one continuous,
+    instantly-recognizable stretch (the umbrella-and-falling-petals dance
+    into the branch-sitting sequence) rather than a cut across scene
+    changes. Scaled to fit 128×64 preserving its own aspect ratio
+    (pillarboxed with black bars, same idea as `nyan.py`'s inset sprite),
+    thresholded to 1 bit at the panel's native resolution -- no grayscale,
+    no dithering.
+  - **Encoding**: `tools/gen_badapple.py` run-length-encodes each frame
+    (`tools/gen_badapple.py`'s own docstring has the exact scheme: one byte
+    per run, no row separators -- a row boundary is just "the running total
+    hit 128"). Bad Apple's large, smooth silhouette regions compress from
+    the raw 8192 bytes/frame (128×64 bits/8) a bitmap would cost down to
+    ~210 bytes/frame on average -- the whole clip is ~61 KB of raw RLE data,
+    ~174 KB as the committed Python source (`firmware/lib/badapple_frames.py`,
+    a `FRAMES` tuple of bytes literals) once accounting for `\xHH` escaping.
+    Comfortably inside the 8 MB flash budget alongside everything else (§8's
+    badge note: ~532 KB of firmware before this landed).
+  - **Source clip is not committed to this repo** -- only
+    `tools/gen_badapple.py` (the generator) and its output
+    (`firmware/lib/badapple_frames.py`, plain committed Python, no binary
+    asset file) are. Regenerating with a different clip/trim needs a local
+    copy of a source video, passed via `--source`.
+
 ## 10. Filters
 
 On-device (`firmware/lib/filters.py`, issue #2 — no server blocklist). Heuristic MVP,
@@ -750,6 +802,7 @@ Do these PRs/slices in order. Each slice must run on hardware or have a clear mo
 8. ~~**Wire it together**~~ — done (issues #26, #27): `firmware/code.py:poll_card()` calls `firmware/lib/net.py` → `firmware/lib/filters.py` → `firmware/lib/hero.py` → `firmware/lib/enrich.py` and assembles a real card dict; `refresh_display()` renders it (or NO TRAFFIC / NO LINK) through `firmware/lib/card.py`, replacing the old placeholder group entirely.
 9. ~~**Multi-aircraft cycling**~~ — done (issue #20): `firmware/lib/cycle.py:Cycle`, a `prefs.display_mode` toggle, and the ready-for-build poll gate in `firmware/code.py` (§8 "Multi-aircraft cycling")
 10. ~~**mDNS discovery**~~ — done (issue #31): `firmware/lib/mdnsadv.py`, station-mode only, best-effort (missing `mdns` module or a failed start is caught and logged, never raised); `firmware/lib/reqguard.py:check()`'s `extra_host` lets `/api/*` calls succeed when reached via the mDNS hostname, not just the IP
+11. ~~**Second easter egg**~~ — done (issue #30): `firmware/lib/badapple.py:Player` (cooperative, non-blocking) plus generated `firmware/lib/badapple_frames.py` (`tools/gen_badapple.py`), hold UP 5 s; wired into `firmware/code.py`'s main loop alongside the pre-existing, still-unwired `firmware/lib/nyan.py` (§9 "Easter eggs")
 
 Do not start a rewrite in ESP-IDF unless CircuitPython HTTPS + HTTP server cannot coexist. If it cannot, port modules 1:1 to Arduino/ESP-IDF and keep this spec.
 
@@ -797,6 +850,9 @@ clock: they check control flow and serial output, not the panel or the radio.
 | `firmware/code.py` in `display_mode: "cycle"`: candidates rotate closest-first through up to 5 cards at `DWELL_S` each and wrap back to the first; the OpenSky poll itself is skipped (not just discarded) while a rotation is still in progress, so a 3-candidate (36 s) rotation makes only 2 poll calls in 60 s, not 4; an empty sky still shows `NO TRAFFIC`, not a crash (§8, §9, issue #20) | `tests/test_code_cycle.py` |
 | `firmware/lib/mdnsadv.py:Advertiser`: `start()` registers `_http._tcp` on port 80 at the given hostname; a missing `mdns` module or a construction failure is caught, not raised; `start()` stops any previous server first (safe to call again on a reconnect) (§7, issue #31) | `tests/test_mdnsadv.py` |
 | `firmware/code.py` mDNS wiring: station mode advertises `tailwatch-XXXX.local` (`XXXX` from the radio MAC, matching the setup-AP suffix), AP mode does not; a Wi-Fi drop stops advertising and a reconnect restarts it under the same (possibly new) hostname; a board/build without the `mdns` module still brings up the plain IP-based UI with no crash (§7, §9, issue #31) | `tests/test_code_mdns.py` |
+| `firmware/lib/buttons.py:HoldButton`: fires exactly once after a continuous `hold_s`-second press, needs a release before firing again, a release before `hold_s` elapses resets the timer, active-low `pressed()` (§9, issue #30) | `tests/test_buttons.py` |
+| `firmware/lib/badapple.py`: `decode_frame()` unpacks the row-wrap RLE scheme correctly (incl. a row that starts "on"); `Player.start()` swaps in its own bitmap/group and saves the prior display state; `tick()` decodes at most one frame, paced by fps, not on every call; the clip ending or `stop()` restores the prior root_group/brightness and deactivates; a `stop()`/`tick()` when not active is a no-op; restarting after a stop replays from frame 0 (§9 "Easter eggs", issue #30) | `tests/test_badapple.py` |
+| `firmware/code.py` Bad Apple wiring: hold UP 5 s starts playback without a shorter hold firing early; `server.poll()` keeps running every iteration throughout (no single multi-second stall); a repeat trigger (hold UP 5 s again while playing) stops it early; the normal card display resumes afterward (§9 "Easter eggs", issue #30) | `tests/test_code_badapple.py` |
 
 ### 13.3 Manual, on hardware only
 
@@ -834,6 +890,12 @@ clock: they check control flow and serial output, not the panel or the radio.
   version, document that here and close issue #31 as won't-fix rather than
   leaving it silently half-working -- the IP-based fallback (serial /
   `SETUP` text) is unaffected either way.
+- Bad Apple (issue #30, first real check on actual `rgbmatrix` hardware --
+  host tests fake `displayio` entirely): hold UP for 5 s starts playback,
+  the clip is legible and recognizable at 128×64 on the real panel (picked
+  without hardware, same caveat as the card layout), holding UP again
+  mid-clip stops it and the normal card display resumes immediately, and
+  the web UI stays responsive (no visible stall) the whole time it plays.
 
 ## 14. Repo / files
 
@@ -866,9 +928,14 @@ firmware/lib/linkwatch.py     # new (station Wi-Fi drop detection + bounded reco
 firmware/lib/httpclient.py    # new (shared, always-closing adafruit_requests client for firmware/lib/net.py)
 firmware/lib/captiveportal.py # new (issue #21: AP-mode captive-portal DNS responder)
 firmware/lib/mdnsadv.py       # new (issue #31: station-mode mDNS advertisement, best-effort)
+firmware/lib/buttons.py       # hold-to-trigger button helper; wired into firmware/code.py (issue #30)
+firmware/lib/nyan.py          # Nyan Cat easter egg (hold DOWN 5s) -- still not wired into firmware/code.py
+firmware/lib/badapple.py      # new (issue #30: Bad Apple easter egg, cooperative/non-blocking Player)
+firmware/lib/badapple_frames.py  # new, generated (issue #30: tools/gen_badapple.py's RLE frame data)
 tools/gen_badges.py     # new, host-only (generates firmware/lib/logos/*.bmp letter-marks)
 tools/convert_logos.py  # new, host-only (issue #18: real logos -> firmware/lib/logos/*.bmp)
 tools/logo_sources/     # new (issue #18: sourced logo images + sources.json manifest)
+tools/gen_badapple.py   # new, host-only (issue #30: video clip -> firmware/lib/badapple_frames.py; source clip not committed)
 tests/test_enrich_filters.py    # host-only
 tests/test_hero.py              # host-only
 tests/test_prefs.py             # host-only (prefs round trip, .bak, clamps, merge rules)
@@ -893,6 +960,9 @@ tests/test_cycle.py             # host-only (issue #20: firmware/lib/cycle.py ro
 tests/test_code_cycle.py        # host-only (issue #20: firmware/code.py sim, cycle-mode rotation + poll gating)
 tests/test_mdnsadv.py           # host-only (issue #31: firmware/lib/mdnsadv.py Advertiser)
 tests/test_code_mdns.py         # host-only (issue #31: firmware/code.py sim, mDNS wiring + reconnect)
+tests/test_buttons.py           # host-only (issue #30: firmware/lib/buttons.py HoldButton)
+tests/test_badapple.py          # host-only (issue #30: firmware/lib/badapple.py decode + Player)
+tests/test_code_badapple.py     # host-only (issue #30: firmware/code.py sim, hold-UP trigger + non-blocking playback)
 firmware/lib/reqguard.py      # new (issue #14: same-origin/CSRF guard)
 DESIGN.md            # this file
 README.md

@@ -16,6 +16,9 @@ MatrixPortal S3 + 128x64 HUB75 panel.
 - `firmware/lib/setupscreen.py` (panel setup-AP credentials screen, issue #11)
 - `firmware/lib/linkwatch.py` (station Wi-Fi drop detection + bounded reconnect watchdog)
 - `firmware/lib/httpclient.py` (shared, always-closing adafruit_requests client pattern for the future `firmware/lib/net.py`)
+- `firmware/lib/buttons.py` (hold-to-trigger button helper)
+- `firmware/lib/badapple.py`, `firmware/lib/badapple_frames.py` (Bad Apple easter egg, hold UP 5s -- issue #30)
+- `firmware/lib/nyan.py` (Nyan Cat easter egg; not currently wired into `firmware/code.py`)
 
 Libraries from the CircuitPython bundle:
 
@@ -71,6 +74,7 @@ file save) does not re-run it.
 - 10 miles each way → OpenSky bbox (printed to serial until `firmware/lib/net.py` is wired)
 - No cloud API -- OpenSky is called directly from the device; hero selection, filters, and airline badges all run on-device (`firmware/lib/hero.py`, `firmware/lib/filters.py`, `firmware/lib/enrich.py`, `firmware/lib/logos/`)
 - If Wi-Fi drops, TailWatch retries the join for ~4 min (serial shows `wifi:` lines), moves the web UI to the new IP, and otherwise reboots into the setup AP.
+- Hold the UP button for 5s for a Bad Apple!! easter egg (24s, plays without interrupting the web UI or ADS-B poll; hold UP again to stop it early).
 
 ## First-time / new Wi-Fi setup
 
