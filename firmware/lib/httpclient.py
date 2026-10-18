@@ -109,13 +109,16 @@ def _drop(r):
     r.socket = None
 
 
-def get_json(pool, url, headers=None, timeout=TIMEOUT_S, budget=BUDGET_S,
-             max_body=MAX_BODY):
-    """GET url and return the decoded JSON body.
+def get_bytes(pool, url, headers=None, timeout=TIMEOUT_S, budget=BUDGET_S,
+              max_body=MAX_BODY):
+    """GET url and return the raw response body (bytearray).
 
     Raises HTTPStatusError (non-200), TimeoutError (budget), ValueError
-    (oversize / bad JSON), OSError / RuntimeError (network, from
-    adafruit_requests). The response is closed on every path.
+    (oversize), OSError / RuntimeError (network, from adafruit_requests).
+    The response is closed on every path. Shared by get_json() (OpenSky
+    JSON polling) and lib/ota.py (manifest + firmware file fetches --
+    those aren't JSON bodies, so they need the raw bytes, not a parsed
+    object).
     """
     t0 = _clock()
     r = None
@@ -144,4 +147,15 @@ def get_json(pool, url, headers=None, timeout=TIMEOUT_S, budget=BUDGET_S,
             r.close()       # fully read: socket back to the keep-alive pool
         else:
             _drop(r)
+    return buf
+
+
+def get_json(pool, url, headers=None, timeout=TIMEOUT_S, budget=BUDGET_S,
+             max_body=MAX_BODY):
+    """GET url and return the decoded JSON body.
+
+    Raises everything get_bytes() does, plus ValueError on unparseable JSON.
+    """
+    buf = get_bytes(pool, url, headers=headers, timeout=timeout, budget=budget,
+                     max_body=max_body)
     return json.loads(buf)  # bytearray: no copy (CPython and CircuitPython)

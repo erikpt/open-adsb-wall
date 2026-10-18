@@ -23,6 +23,7 @@ DEFAULTS = {
     "us_dst": True,         # auto-apply fixed US DST rule (lib/tz.py); not a tz database
     "api": "https://opensky-network.org/api",
     "token": "",
+    "display_mode": "hero",  # "hero" (one aircraft, hysteresis) | "cycle" (issue #20)
 }
 
 _BOOLS = {
@@ -126,6 +127,8 @@ def _clamp(p):
     p.pop("timezone", None)  # legacy IANA string: unresolvable on-device, drop it
     if p["night_mode"] not in ("off", "fixed", "sunset"):
         p["night_mode"] = "sunset"
+    if p.get("display_mode") not in ("hero", "cycle"):
+        p["display_mode"] = DEFAULTS["display_mode"]
     return p
 
 

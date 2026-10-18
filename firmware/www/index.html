@@ -28,6 +28,12 @@ h1{font-size:1.2rem}
 <label>Longitude</label><input name="lon" id="lon" step="any"/>
 <label>Box (miles each way)</label><input name="nm" id="nm" type="number" min="1" max="50" step="0.5"/>
 
+<h2>Display</h2>
+<select name="display_mode" id="display_mode">
+  <option value="hero">One aircraft (closest, held until something closer appears)</option>
+  <option value="cycle">Cycle through up to 5, 12 s each</option>
+</select>
+
 <h2>Filters</h2>
 <div class="check"><input type="checkbox" name="hide_heli" id="hide_heli" value="1"/><span>Hide helicopters</span></div>
 <div class="check"><input type="checkbox" name="hide_ga" id="hide_ga" value="1"/><span>Hide general aviation</span></div>
@@ -93,6 +99,18 @@ h1{font-size:1.2rem}
 <button type="submit">Save Wi-Fi &amp; restart</button>
 <p class="muted">TailWatch restarts to join this network. If it can't, it comes back as the TailWatch-XXXX setup hotspot (name and password shown on the panel).</p>
 </form>
+
+<div id="ota">
+<h2>Firmware update</h2>
+<label>Manifest URL</label>
+<input id="ota_url" placeholder="https://.../manifest.json" autocomplete="off" autocapitalize="none" spellcheck="false"/>
+<button type="button" id="ota_check">Check for update</button>
+<p class="muted" id="ota_info"></p>
+<button type="button" id="ota_apply" disabled>Apply update &amp; restart</button>
+<button type="button" id="ota_rollback">Roll back last update &amp; restart</button>
+<p class="muted" id="ota_status"></p>
+<p class="muted">Every file is verified (checksum) before anything is written; a failed check or download never touches the current firmware. Rolling back restores the previous version of every file the last update changed.</p>
+</div>
 <script>
 const $=id=>document.getElementById(id);
 function set(id,v){const el=document.getElementById(id);if(!el)return;
@@ -147,6 +165,46 @@ $("wf").addEventListener("submit",e=>{
       ?"Saved. TailWatch is restarting to join "+j.ssid+". Reconnect this phone to that network; the new address is on serial and in your router's device list."
       :"Not saved: "+(j.error||"unknown error");})
     .catch(()=>{$("wifistate").textContent="No reply -- TailWatch may already be restarting.";});
+});
+
+let otaChecked=null; // {url, version} from the last successful /api/ota/check
+$("ota_check").addEventListener("click",()=>{
+  const url=$("ota_url").value.trim();
+  otaChecked=null;$("ota_apply").disabled=true;$("ota_info").textContent="";
+  $("ota_status").textContent="checking…";
+  fetch("/api/ota/check",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url})})
+    .then(r=>r.json().then(j=>({ok:r.ok,j})))
+    .then(({ok,j})=>{
+      if(!ok){$("ota_status").textContent="Not found: "+(j.error||"unknown error");return;}
+      otaChecked={url,version:j.version};
+      const kb=(j.files.reduce((a,f)=>a+f.size,0)/1024).toFixed(1);
+      $("ota_info").textContent="Version "+j.version+": "+j.files.length+" file(s), "+kb+" KB";
+      $("ota_apply").disabled=false;
+      $("ota_status").textContent="Ready to apply.";
+    })
+    .catch(()=>{$("ota_status").textContent="Check failed -- no reply.";});
+});
+$("ota_apply").addEventListener("click",()=>{
+  if(!otaChecked||otaChecked.url!==$("ota_url").value.trim()){
+    $("ota_status").textContent="Check for an update at this URL first.";return;}
+  if(!confirm("Apply firmware update "+otaChecked.version+"? TailWatch will restart."))return;
+  $("ota_status").textContent="applying…";
+  fetch("/api/ota/apply",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:otaChecked.url})})
+    .then(r=>r.json().then(j=>({ok:r.ok,j})))
+    .then(({ok,j})=>{$("ota_status").textContent=ok
+      ?"Applied "+j.version+". Restarting…"
+      :"Not applied: "+(j.error||"unknown error");})
+    .catch(()=>{$("ota_status").textContent="No reply -- TailWatch may already be restarting.";});
+});
+$("ota_rollback").addEventListener("click",()=>{
+  if(!confirm("Roll back the last firmware update? TailWatch will restart."))return;
+  $("ota_status").textContent="rolling back…";
+  fetch("/api/ota/rollback",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})
+    .then(r=>r.json().then(j=>({ok:r.ok,j})))
+    .then(({ok,j})=>{$("ota_status").textContent=ok
+      ?"Rolled back "+(j.restored||[]).join(", ")+". Restarting…"
+      :"Not rolled back: "+(j.error||"unknown error");})
+    .catch(()=>{$("ota_status").textContent="No reply -- TailWatch may already be restarting.";});
 });
 </script>
 </body>
