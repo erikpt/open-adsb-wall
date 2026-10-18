@@ -1,3 +1,11 @@
+# Finish an interrupted OTA file swap (issue #29) before ANY lib/ import below:
+# an OTA power cut can leave a lib module as only `<path>.ota_new`, which would
+# make the import fail. ota_recover.py lives at the root (OTA can't replace it)
+# and imports only os/json; boot.py also runs it, but only on a hard reset with
+# a writable filesystem, so this covers the soft-reload and UP-held cases too.
+import ota_recover
+ota_recover.recover()
+
 import time
 import json
 import os
@@ -162,7 +170,6 @@ def show_setup_screen(lines):
 
 
 wifisettings.recover()  # finish an interrupted settings.toml swap before reading it
-ota.recover()  # finish an interrupted OTA file swap before anything it might have touched loads (issue #29)
 sta_ok, cfg_ssid = join_station()
 ap_mode = not sta_ok
 ap_ssid = ""
@@ -319,7 +326,9 @@ def post_prefs(request: Request):
             content_type="application/json",
             status=Status(503, "Service Unavailable"),
         )
-    if not ap_mode and dimmer.apply(brightness(prefs)):
+    # Not while the Bad Apple egg owns display.brightness/root_group (issue #30):
+    # the main loop's next 1 s brightness tick applies the new level once it ends.
+    if not ap_mode and not badapple_player.active and dimmer.apply(brightness(prefs)):
         print("brightness", dimmer.level)
     return _json(request, public(prefs))
 
@@ -652,12 +661,25 @@ def refresh_display(now):
     """
     if badapple_player.active:
         return
-    link_down = now - last_poll_ok_at > hero.max_stale_s
+    cycle = prefs["display_mode"] == "cycle"
+    stale_s = hero.max_stale_s
+    if cycle:
+        # Cycle mode deliberately skips OpenSky polls until the current
+        # snapshot has been shown all the way through (up to MAX_CARDS *
+        # DWELL_S = 60 s), so last_poll_ok_at legitimately ages by a whole
+        # rotation between polls. Without this allowance a 4-5 card rotation
+        # outlasts hero.max_stale_s (45 s) and reads as NO LINK.
+        stale_s += len(cyc.list) * cyc.dwell_s
+        # Tick even while NO LINK is showing: the rotation wrapping is what
+        # sets ready_for_build() and lets the next poll fire at all, so a
+        # frozen rotation would turn any real outage into a permanent one.
+        cand = cyc.tick(now)
+    link_down = now - last_poll_ok_at > stale_s
     if link_down:
         card_widget.show_message("NO LINK")
         print("display NO LINK")
-    elif prefs["display_mode"] == "cycle":
-        card = _assemble_card(cyc.tick(now))
+    elif cycle:
+        card = _assemble_card(cand)
         card_widget.show_card(card, dimmer, _local_hhmm())
         print("display", card.get("flight") or "NO TRAFFIC")
     elif last_card is None:  # within the boot grace period, first poll not back yet

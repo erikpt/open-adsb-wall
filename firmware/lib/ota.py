@@ -27,22 +27,21 @@ Safety (DESIGN.md issue #29's acceptance criteria):
   .ota_new` staging file first; only once *all* of them succeed does the
   swap phase run at all. A failure partway through staging deletes every
   `.ota_new` it had written and touches zero live files.
-- **Crash-safe swap**: each live file's replacement is the exact
-  `path.new -> (path -> path.bak) -> path` dance lib/wifisettings.py's
-  save()/recover() already use for settings.toml, just looped over
-  multiple files with their own `.ota_new`/`.ota_bak` suffixes (so OTA and
-  a concurrent Wi-Fi settings save can never collide on the same temp
-  name). /ota_state.json records which files are mid-swap so recover()
-  (called at boot, same as wifisettings.recover()) can finish an
-  interrupted swap instead of leaving a half-applied, possibly unbootable
-  set of files.
+- **Crash-safe swap**: the swap loop, its /ota_state.json bookkeeping and
+  the boot-time recover() all live in firmware/ota_recover.py (root, not
+  lib/, and not replaceable by an OTA -- see that module's docstring for why
+  that matters). Each file's replacement is the `path.new -> (path ->
+  path.bak) -> path` dance lib/wifisettings.py's save() uses, and
+  recover() finishes the *whole* set after a power cut, including files
+  whose swap hadn't started yet.
 - **Rollback**: after a completed apply, each live file's immediately-
-  previous version is still sitting at `<path>.ota_bak`. rollback() swaps
-  every one back over the current (bad) file. One level of history only --
-  this is a manual, owner-triggered revert (a new web UI button), not
-  automatic boot-failure detection, which would need boot.py changes and a
-  crash counter and is explicitly out of scope for this first cut (see
-  DESIGN.md's note on this).
+  previous version is still sitting at `<path>.ota_bak`. rollback() stages
+  a *copy* of each backup as `<path>.ota_new` (backups stay intact until
+  the swap loop actually starts) and then runs the very same crash-safe
+  swap as apply(), so it is recoverable by the same recover(). One level of
+  history only; manual, owner-triggered -- automatic boot-failure detection
+  would need boot.py changes and a crash counter and is explicitly out of
+  scope for this first cut (see DESIGN.md's note on this).
 
 Pure Python (os, json, hashlib if present): runs under desktop CPython for
 tests/test_ota.py, which fakes lib/httpclient.py the same way
@@ -52,22 +51,28 @@ import json
 import os
 
 import httpclient
+import ota_recover as rec
 
 try:
     import hashlib
 except ImportError:
     hashlib = None
 
-STATE_PATH = "/ota_state.json"
 MAX_MANIFEST_SIZE = 8192
 MAX_FILE_SIZE = 262144  # 256 KiB: comfortably covers every file in this repo today
-NEW_SUFFIX = ".ota_new"
-BAK_SUFFIX = ".ota_bak"
+# httpclient's default 8 s body budget is sized for OpenSky's few-KB polls; a
+# ~170 KB firmware file over TLS on the ESP32-S3 needs far longer. This
+# blocks the main loop for as long as a fetch takes, which is acceptable
+# only because OTA is an explicit, owner-triggered "device restarts after
+# this" action (the web UI says so), unlike the background poll.
+FILE_BUDGET_S = 60
+NEW_SUFFIX = rec.NEW_SUFFIX
+BAK_SUFFIX = rec.BAK_SUFFIX
 
 # A manifest entry's path must land inside the existing firmware tree:
 # code.py itself, or under lib/ or www/. Blocks path traversal (".." or a
 # leading "/") and blocks overwriting anything else on CIRCUITPY (prefs.json,
-# settings.toml, boot.py) via a malicious or buggy manifest.
+# settings.toml, boot.py, ota_recover.py) via a malicious or buggy manifest.
 _ALLOWED_TOP = ("lib/", "www/")
 
 
@@ -79,9 +84,15 @@ class OTAError(Exception):
 
 def safe_path(path):
     """True if `path` is a plain relative path under code.py or lib//www/,
-    with no ".." traversal and no absolute leading slash."""
+    with no ".." traversal, no absolute leading slash, and no backslash or
+    control character (CircuitPython's FAT driver accepts "\\" as a path
+    separator, so "lib/..\\boot.py" would otherwise slip past a "/"-only
+    ".." check)."""
     if not isinstance(path, str) or not path or path.startswith("/"):
         return False
+    for ch in path:
+        if ch == "\\" or ord(ch) < 0x20:
+            return False
     if path == "code.py":
         return True
     if not path.startswith(_ALLOWED_TOP):
@@ -138,22 +149,21 @@ def fetch_manifest(pool, url):
 
 
 def _sha256_hex(data):
+    """Hex sha256 of `data`, or None if hashlib is unavailable. Uses only
+    the API CircuitPython's hashlib has -- new(name), update(), digest() --
+    not CPython's hashlib.sha256()/hexdigest() shortcuts, which it lacks."""
     if hashlib is None:
         return None
-    return hashlib.sha256(data).hexdigest()
+    h = hashlib.new("sha256")
+    h.update(data)
+    return "".join("%02x" % b for b in h.digest())
 
 
-def _write_state(phase, version, paths):
-    with open(STATE_PATH, "w") as f:
-        json.dump({"phase": phase, "version": version, "files": list(paths)}, f)
-
-
-def _read_state():
+def _remove_quietly(path):
     try:
-        with open(STATE_PATH, "r") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def _stage_file(pool, f):
@@ -162,7 +172,8 @@ def _stage_file(pool, f):
     whatever httpclient raises on a fetch failure -- in every case, no file
     on disk is touched beyond this one's own .ota_new (the caller is what
     cleans those up across files on a later failure)."""
-    data = httpclient.get_bytes(pool, f["url"], max_body=MAX_FILE_SIZE)
+    data = httpclient.get_bytes(pool, f["url"], budget=FILE_BUDGET_S,
+                                max_body=MAX_FILE_SIZE)
     if len(data) != f["size"]:
         raise OTAError("file %r: fetched %d bytes, manifest says %d" % (
             f["path"], len(data), f["size"]))
@@ -176,77 +187,41 @@ def _stage_file(pool, f):
         out.write(data)
 
 
+def _copy(src, dst):
+    with open(src, "rb") as i:
+        with open(dst, "wb") as o:
+            while True:
+                chunk = i.read(1024)
+                if not chunk:
+                    break
+                o.write(chunk)
+
+
 def apply(pool, manifest):
     """Fetch + verify + stage every file; only once all succeed, swap every
     one live. Returns manifest["version"]. Raises OTAError (validation/
     integrity) or an httpclient exception (fetch failure) -- either way, if
     raised during staging, every .ota_new this call wrote is removed and no
-    live file is touched; see this module's docstring for the swap phase's
+    live file is touched; see firmware/ota_recover.py for the swap phase's
     own crash safety once it starts.
     """
     files = manifest["files"]
     staged = []
     try:
         for f in files:
+            staged.append(f["path"])  # before staging: a half-written .ota_new is cleaned up too
             _stage_file(pool, f)
-            staged.append(f["path"])
     except Exception:
         for path in staged:
-            try:
-                os.remove(path + NEW_SUFFIX)
-            except OSError:
-                pass
+            _remove_quietly(path + NEW_SUFFIX)
         raise
 
     paths = [f["path"] for f in files]
-    _write_state("swapping", manifest["version"], paths)
+    rec.write_state("swapping", manifest["version"], paths, then="done")
     for path in paths:
-        _swap_one(path)
-    _write_state("done", manifest["version"], paths)
+        rec.swap_one(path)
+    rec.write_state("done", manifest["version"], paths)
     return manifest["version"]
-
-
-def _swap_one(path):
-    """path.ota_new -> (path -> path.ota_bak) -> path. Mirrors
-    lib/wifisettings.py:save()'s crash-safe rename order exactly."""
-    bak = path + BAK_SUFFIX
-    new = path + NEW_SUFFIX
-    try:
-        os.remove(bak)
-    except OSError:
-        pass
-    try:
-        os.rename(path, bak)
-    except OSError:
-        pass  # path didn't exist yet (a brand-new file the manifest added)
-    os.rename(new, path)
-
-
-def recover():
-    """Finish an interrupted apply() swap phase. Call once at boot, before
-    anything imports the modules an OTA might have replaced (same spot
-    wifisettings.recover() runs, for the same reason) -- a power cut
-    between two of apply()'s per-file renames otherwise leaves that one
-    file as only `path.ota_new`, which this promotes back to `path`.
-    Silently does nothing if there's no in-progress state, or on a
-    read-only filesystem (booted with UP held)."""
-    state = _read_state()
-    if state is None or state.get("phase") != "swapping":
-        return
-    for path in state.get("files", ()):
-        try:
-            os.stat(path)
-            continue  # already swapped in (or always existed): nothing to do
-        except OSError:
-            pass
-        try:
-            os.rename(path + NEW_SUFFIX, path)
-        except OSError:
-            pass  # neither path nor path.ota_new exists: nothing recoverable
-    try:
-        _write_state("done", state.get("version"), state.get("files", ()))
-    except OSError:
-        pass
 
 
 def rollback():
@@ -254,23 +229,30 @@ def rollback():
     (presumably bad) version. Returns the list of paths actually restored
     (a path with no .ota_bak -- e.g. it was newly added by that update, so
     there was nothing to revert to -- is skipped, not an error). Raises
-    OTAError if there's no completed update recorded to roll back."""
-    state = _read_state()
+    OTAError if there's no completed update recorded to roll back.
+
+    Staged as copies and swapped through the same ota_recover machinery as
+    apply(): a power cut before the swap loop starts leaves every .ota_bak
+    intact and the state still "done" (just retry); a cut inside the loop
+    leaves state "swapping", which recover() finishes toward "rolled_back".
+    """
+    state = rec.read_state()
     if state is None or state.get("phase") != "done":
         raise OTAError("no completed update to roll back")
-    restored = []
-    for path in state.get("files", ()):
-        bak = path + BAK_SUFFIX
-        try:
-            os.stat(bak)
-        except OSError:
-            continue
-        try:
-            os.remove(path + NEW_SUFFIX)
-        except OSError:
-            pass
-        os.rename(path, path + NEW_SUFFIX)
-        os.rename(bak, path)
-        restored.append(path)
-    _write_state("rolled_back", state.get("version"), state.get("files", ()))
-    return restored
+    version = state.get("version")
+    paths = [p for p in state.get("files", ()) if rec.exists(p + BAK_SUFFIX)]
+    staged = []
+    try:
+        for path in paths:
+            staged.append(path)
+            _copy(path + BAK_SUFFIX, path + NEW_SUFFIX)
+    except Exception:
+        for path in staged:
+            _remove_quietly(path + NEW_SUFFIX)
+        raise
+    if paths:
+        rec.write_state("swapping", version, paths, then="rolled_back")
+        for path in paths:
+            rec.swap_one(path)
+    rec.write_state("rolled_back", version, state.get("files", ()))
+    return paths

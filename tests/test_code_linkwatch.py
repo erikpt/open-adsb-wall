@@ -13,6 +13,7 @@ from contextlib import redirect_stdout
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, os.path.join(ROOT, "firmware", "lib"))
+sys.path.insert(0, os.path.join(ROOT, "firmware"))  # root-level ota_recover.py
 CODE = os.path.join(ROOT, "firmware", "code.py")
 
 

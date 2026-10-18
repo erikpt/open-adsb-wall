@@ -6,6 +6,7 @@ MatrixPortal S3 + 128x64 HUB75 panel.
 
 - `firmware/boot.py`
 - `firmware/code.py`
+- `firmware/ota_recover.py` (root of the drive, not `lib/`: finishes an interrupted OTA update at boot -- issue #29)
 - `prefs.json` (copy from `firmware/prefs.example.json`)
 - `settings.toml` (Wi-Fi only -- copy from `firmware/settings.toml.example`; do **not** set `CIRCUITPY_WEB_API_PASSWORD`)
 - `firmware/www/index.html`
@@ -83,9 +84,12 @@ the device fetches from the URL you give it, there is no push/hosted update
 service of this project's own (issue #2: no cloud tier).
 
 If a power cut happens mid-apply, the next boot finishes the interrupted
-file swap on its own (`firmware/lib/ota.py:recover()`, same crash-safe
-`.new`/`.bak` dance as the Wi-Fi settings writer) rather than leaving a
-mixed set of old/new files. There is no automatic "this update won't boot,
+swap of the whole file set on its own (`firmware/ota_recover.py`, run from
+`boot.py` and again at the very top of `code.py`, before anything in `lib/`
+is imported; same crash-safe `.new`/`.bak` dance as the Wi-Fi settings
+writer) rather than leaving a mixed set of old/new files. `ota_recover.py`
+must sit at the drive root next to `boot.py`/`code.py`, and OTA manifests
+can't replace it. There is no automatic "this update won't boot,
 revert" detection yet -- if an update leaves the device unreachable over
 Wi-Fi, recover with the USB procedure above (or a full reflash) and roll
 back from there.

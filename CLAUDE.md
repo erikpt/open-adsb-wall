@@ -83,7 +83,10 @@ firmware updates from a web-UI-supplied manifest URL, issue #29 — checksum
 verification before anything live is touched, a crash-safe per-file
 stage-then-swap apply mirroring `wifisettings.py`'s `.new`/`.bak` dance, and
 a manual `rollback()`; see `DESIGN.md` §7 "OTA firmware updates" for the
-full safety design).
+full safety design). The swap loop and boot-time `recover()` live in
+`firmware/ota_recover.py` at the drive root, deliberately *not* in `lib/` and
+never OTA-replaceable, so `boot.py` and the top of `code.py` can run it before
+any `lib/` import an interrupted update may have broken.
 
 `buttons.py` (hold-to-trigger button helper) backs the Bad Apple easter egg,
 `badapple.py` (hold UP 5s, issue #30 — frame data in `badapple_frames.py`,

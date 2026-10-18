@@ -73,6 +73,38 @@ def test_poll_is_skipped_mid_rotation_not_just_discarded():
     assert len(sim.W.net_calls) == 2, sim.W.net_calls
 
 
+FIVE_STATES = THREE_STATES + [
+    _state("ddd004", "DDD4    ", 47.72, -122.47),
+    _state("eee005", "EEE5    ", 47.74, -122.49),
+]
+
+
+def test_five_card_rotation_never_reads_as_no_link():
+    # 5 cards * 12 s = 60 s per rotation, longer than hero.max_stale_s (45 s),
+    # and polls are skipped until a rotation completes -- so without the
+    # rotation-length allowance in refresh_display() this flipped to NO LINK
+    # at ~45 s, stopped ticking, and never polled again (1 net call, forever).
+    outcome, out = tcp.run_with(CYCLE_PIN, [("ok", FIVE_STATES)], end=200)
+    assert outcome == "stop", (outcome, out[-800:])
+    assert "display NO LINK" not in out, out
+    assert len(sim.W.net_calls) >= 3, sim.W.net_calls  # polls keep happening, one per rotation
+    shown = [d for d in _displays(out) if d != "NO TRAFFIC"]
+    assert {"AAA1", "BBB2", "CCC3", "DDD4", "EEE5"} <= set(shown), set(shown)
+
+
+def test_real_outage_shows_no_link_then_recovers():
+    # A genuine outage still reads as NO LINK (the allowance is one rotation,
+    # not unbounded), and polling keeps going so the first success recovers it.
+    spec = [("ok", FIVE_STATES)] + [("err", OSError("down"))] * 8 + [("ok", FIVE_STATES)]
+    outcome, out = tcp.run_with(CYCLE_PIN, spec, end=260)
+    assert outcome == "stop", (outcome, out[-800:])
+    assert "display NO LINK" in out, out
+    assert len(sim.W.net_calls) >= 10, sim.W.net_calls  # polling continued through the outage
+    last_no_link = max(i for i, d in enumerate(_displays(out)) if d == "NO LINK")
+    assert any(d in ("AAA1", "BBB2", "CCC3", "DDD4", "EEE5")
+               for d in _displays(out)[last_no_link + 1:]), "never recovered from NO LINK"
+
+
 def test_no_candidates_shows_no_traffic_not_a_crash():
     outcome, out = tcp.run_with(CYCLE_PIN, [("ok", [])], end=20)
     assert outcome == "stop", (outcome, out[-800:])

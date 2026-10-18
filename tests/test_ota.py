@@ -14,10 +14,13 @@ import shutil
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware", "lib"))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "firmware", "lib"))
+sys.path.insert(0, os.path.join(HERE, "..", "firmware"))  # root-level ota_recover.py
 
 import httpclient  # noqa: E402
 import ota  # noqa: E402
+import ota_recover as rec  # noqa: E402
 
 GOOD_URL = "https://example.com/release/1.4.0/code.py"
 
@@ -37,11 +40,13 @@ class FakeGetBytes:
 
     def __init__(self, by_url=None, raises=None):
         self.calls = []
+        self.kwargs = []
         self.by_url = by_url or {}
         self.raises = raises
 
     def __call__(self, pool, url, headers=None, **kw):
         self.calls.append(url)
+        self.kwargs.append(kw)
         if self.raises is not None and (callable(self.raises) is False):
             raise self.raises
         if callable(self.raises):
@@ -71,7 +76,7 @@ class TempCwd:
         os.chdir(self.dir)
         os.makedirs("lib", exist_ok=True)
         os.makedirs("www", exist_ok=True)
-        ota.STATE_PATH = os.path.join(self.dir, "ota_state.json")
+        rec.STATE_PATH = os.path.join(self.dir, "ota_state.json")
         return self.dir
 
     def __exit__(self, *exc):
@@ -89,7 +94,15 @@ def test_safe_path_accepts_code_py_and_lib_and_www():
 
 def test_safe_path_rejects_traversal_and_other_files():
     for bad in ("../boot.py", "lib/../../boot.py", "/etc/passwd", "settings.toml",
-                "prefs.json", "boot.py", "", None, "lib/", "lib//hero.py" if False else "lib/x/../y.py"):
+                "prefs.json", "boot.py", "ota_recover.py", "", None, "lib/",
+                "lib//hero.py", "lib/x/../y.py"):
+        assert not ota.safe_path(bad), bad
+
+
+def test_safe_path_rejects_backslash_and_control_chars():
+    # FatFs accepts "\\" as a separator, so these would otherwise walk out of lib/www
+    for bad in ("lib/..\\boot.py", "www/..\\..\\prefs.json", "lib\\hero.py",
+                "lib/he\x00ro.py", "lib/he\nro.py"):
         assert not ota.safe_path(bad), bad
 
 
@@ -216,7 +229,7 @@ def test_apply_writes_files_and_backs_up_existing():
             assert f.read() == b"old code"
         assert not os.path.exists("lib/hero.py" + ota.BAK_SUFFIX)  # brand-new file: nothing to back up
         assert not os.path.exists("code.py" + ota.NEW_SUFFIX)
-        with open(ota.STATE_PATH) as f:
+        with open(rec.STATE_PATH) as f:
             state = json.load(f)
         assert state["phase"] == "done" and state["version"] == "1.4.0"
 
@@ -328,11 +341,11 @@ def test_recover_finishes_interrupted_swap():
         # os.rename(new, path): code.py is gone, only code.py.ota_new remains.
         with open("code.py" + ota.NEW_SUFFIX, "w") as f:
             f.write("new code")
-        ota._write_state("swapping", "1.4.0", ["code.py"])
-        ota.recover()
+        rec.write_state("swapping", "1.4.0", ["code.py"])
+        rec.recover()
         with open("code.py") as f:
             assert f.read() == "new code"
-        with open(ota.STATE_PATH) as f:
+        with open(rec.STATE_PATH) as f:
             assert json.load(f)["phase"] == "done"
 
 
@@ -340,15 +353,15 @@ def test_recover_is_a_noop_when_swap_already_completed():
     with TempCwd():
         with open("code.py", "w") as f:
             f.write("already swapped")
-        ota._write_state("swapping", "1.4.0", ["code.py"])
-        ota.recover()  # path exists already: nothing to promote
+        rec.write_state("swapping", "1.4.0", ["code.py"])
+        rec.recover()  # path exists already: nothing to promote
         with open("code.py") as f:
             assert f.read() == "already swapped"
 
 
 def test_recover_is_a_noop_with_no_state_file():
     with TempCwd():
-        ota.recover()  # must not raise
+        rec.recover()  # must not raise
 
 
 # ---- rollback() ----
@@ -395,6 +408,203 @@ def test_rollback_without_a_completed_update_raises():
             assert False
         except ota.OTAError:
             pass
+
+
+# ---- crash safety / regression tests for review findings ----
+
+class _PowerCut(Exception):
+    pass
+
+
+def _cut_swap_after(n):
+    """Make rec.swap_one raise _PowerCut on its (n+1)th call, like losing
+    power between per-file swaps. Returns an undo callable."""
+    real = rec.swap_one
+    count = [0]
+
+    def cutting(path):
+        if count[0] >= n:
+            raise _PowerCut()
+        count[0] += 1
+        real(path)
+
+    rec.swap_one = cutting
+    return lambda: setattr(rec, "swap_one", real)
+
+
+def _two_file_manifest():
+    a, b = b"new code", b"new hero"
+    manifest = _manifest([
+        _entry("code.py", a, url="https://example.com/code.py"),
+        _entry("lib/hero.py", b, url="https://example.com/hero.py"),
+    ])
+    fake = FakeGetBytes(by_url={"https://example.com/code.py": a,
+                                "https://example.com/hero.py": b})
+    return manifest, fake
+
+
+def _read(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def test_recover_finishes_whole_set_when_cut_between_files():
+    with TempCwd():
+        for name, text in (("code.py", "old code"), ("lib/hero.py", "old hero")):
+            with open(name, "w") as f:
+                f.write(text)
+        manifest, fake = _two_file_manifest()
+        real = _patched(fake)
+        undo = _cut_swap_after(1)  # first file swaps, power dies before the second
+        try:
+            try:
+                ota.apply(object(), manifest)
+                assert False
+            except _PowerCut:
+                pass
+        finally:
+            undo()
+            _restore(real)
+        # the half-applied state a reboot would find
+        assert _read("code.py") == b"new code" and _read("lib/hero.py") == b"old hero"
+        assert os.path.exists("lib/hero.py" + ota.NEW_SUFFIX)
+        rec.recover()
+        assert _read("code.py") == b"new code" and _read("lib/hero.py") == b"new hero"
+        assert not os.path.exists("lib/hero.py" + ota.NEW_SUFFIX)
+        assert _read("lib/hero.py" + ota.BAK_SUFFIX) == b"old hero"  # still revertible
+        with open(rec.STATE_PATH) as f:
+            assert json.load(f)["phase"] == "done"
+
+
+def test_recover_promotes_file_cut_between_its_two_renames():
+    with TempCwd():
+        with open("lib/hero.py" + ota.BAK_SUFFIX, "w") as f:
+            f.write("old hero")
+        with open("lib/hero.py" + ota.NEW_SUFFIX, "w") as f:
+            f.write("new hero")
+        rec.write_state("swapping", "1.4.0", ["lib/hero.py"], then="done")
+        rec.recover()
+        assert _read("lib/hero.py") == b"new hero"
+        assert _read("lib/hero.py" + ota.BAK_SUFFIX) == b"old hero"  # backup not clobbered
+
+
+def _applied_two_files():
+    for name, text in (("code.py", "old code"), ("lib/hero.py", "old hero")):
+        with open(name, "w") as f:
+            f.write(text)
+    manifest, fake = _two_file_manifest()
+    real = _patched(fake)
+    try:
+        ota.apply(object(), manifest)
+    finally:
+        _restore(real)
+
+
+def test_rollback_cut_mid_swap_is_finished_by_recover():
+    with TempCwd():
+        _applied_two_files()
+        undo = _cut_swap_after(1)
+        try:
+            try:
+                ota.rollback()
+                assert False
+            except _PowerCut:
+                pass
+        finally:
+            undo()
+        with open(rec.STATE_PATH) as f:
+            assert json.load(f)["phase"] == "swapping"
+        rec.recover()
+        assert _read("code.py") == b"old code" and _read("lib/hero.py") == b"old hero"
+        with open(rec.STATE_PATH) as f:
+            assert json.load(f)["phase"] == "rolled_back"
+
+
+def test_rollback_staging_failure_leaves_backups_and_state_intact():
+    with TempCwd():
+        _applied_two_files()
+        real_copy = ota._copy
+        calls = [0]
+
+        def flaky(src, dst):
+            calls[0] += 1
+            if calls[0] == 2:
+                raise OSError("disk full")
+            real_copy(src, dst)
+
+        ota._copy = flaky
+        try:
+            try:
+                ota.rollback()
+                assert False
+            except OSError:
+                pass
+        finally:
+            ota._copy = real_copy
+        assert _read("code.py") == b"new code"  # nothing live touched
+        assert not os.path.exists("code.py" + ota.NEW_SUFFIX)  # staged copy cleaned up
+        assert os.path.exists("code.py" + ota.BAK_SUFFIX) and os.path.exists("lib/hero.py" + ota.BAK_SUFFIX)
+        with open(rec.STATE_PATH) as f:
+            assert json.load(f)["phase"] == "done"
+        assert sorted(ota.rollback()) == ["code.py", "lib/hero.py"]  # retry succeeds
+        assert _read("code.py") == b"old code"
+
+
+def test_second_rollback_is_refused():
+    with TempCwd():
+        _applied_two_files()
+        ota.rollback()
+        try:
+            ota.rollback()
+            assert False
+        except ota.OTAError:
+            pass
+
+
+def test_sha256_uses_only_the_circuitpython_hashlib_api():
+    # CircuitPython's hashlib has new()/update()/digest(), not sha256()/hexdigest()
+    class Hash:
+        def __init__(self, name):
+            self._h = hashlib.new(name)
+
+        def update(self, data):
+            self._h.update(data)
+
+        def digest(self):
+            return self._h.digest()
+
+    class CPHashlib:
+        @staticmethod
+        def new(name, data=b""):
+            return Hash(name)
+
+    real = ota.hashlib
+    ota.hashlib = CPHashlib
+    try:
+        assert ota._sha256_hex(b"abc") == hashlib.sha256(b"abc").hexdigest()
+        with TempCwd():
+            manifest = _manifest([_entry("code.py", b"data", url="https://example.com/code.py")])
+            fake = FakeGetBytes(by_url={"https://example.com/code.py": b"data"})
+            r = _patched(fake)
+            try:
+                assert ota.apply(object(), manifest) == "1.4.0"
+            finally:
+                _restore(r)
+    finally:
+        ota.hashlib = real
+
+
+def test_file_fetches_get_a_longer_budget_than_the_default():
+    with TempCwd():
+        manifest = _manifest([_entry("code.py", b"data", url="https://example.com/code.py")])
+        fake = FakeGetBytes(by_url={"https://example.com/code.py": b"data"})
+        real = _patched(fake)
+        try:
+            ota.apply(object(), manifest)
+        finally:
+            _restore(real)
+        assert fake.kwargs[0]["budget"] == ota.FILE_BUDGET_S
+        assert ota.FILE_BUDGET_S > httpclient.BUDGET_S
 
 
 if __name__ == "__main__":
