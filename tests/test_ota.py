@@ -607,6 +607,98 @@ def test_file_fetches_get_a_longer_budget_than_the_default():
         assert ota.FILE_BUDGET_S > httpclient.BUDGET_S
 
 
+# ---- version compare + background Checker (issue #29 panel check) ----
+
+def test_version_tuple_and_is_newer():
+    assert ota.version_tuple("v1.4.0") == (1, 4, 0)
+    assert ota.version_tuple("1.4") == (1, 4)
+    assert ota.version_tuple("1.0-rc1") is None
+    assert ota.version_tuple(None) is None
+    assert ota.is_newer("1.10.0", "1.9.9")        # numeric, not string, compare
+    assert not ota.is_newer("1.9.9", "1.10.0")
+    assert not ota.is_newer("1.0.0", "1.0.0")
+    assert ota.is_newer("2", "1.9")
+    assert ota.is_newer("1.0-rc1", "1.0.0")        # unparseable: any difference is offered
+    assert not ota.is_newer("weird", "weird")
+
+
+def _manifest_bytes(version):
+    return json.dumps(_manifest([_entry("code.py", b"x")], version=version)).encode()
+
+
+def _checker_fake(version=None, raises=None):
+    return FakeGetBytes(by_url={GOOD_URL: _manifest_bytes(version)} if version else {}, raises=raises)
+
+
+def test_checker_is_off_without_a_url():
+    c = ota.Checker("1.0.0")
+    assert not c.due(10_000, "")
+    assert not c.due(10_000, None)
+
+
+def test_checker_waits_first_delay_then_is_due_again_only_after_the_interval():
+    c = ota.Checker("1.0.0")
+    assert not c.due(100, GOOD_URL)                 # first sight: clock starts
+    assert not c.due(100 + c.FIRST_DELAY_S - 1, GOOD_URL)
+    assert c.due(100 + c.FIRST_DELAY_S, GOOD_URL)
+    real = _patched(_checker_fake("1.0.0"))
+    try:
+        c.check(object(), GOOD_URL, 150)
+    finally:
+        _restore(real)
+    assert not c.due(150 + c.INTERVAL_S - 1, GOOD_URL)
+    assert c.due(150 + c.INTERVAL_S, GOOD_URL)
+
+
+def test_checker_announces_a_new_version_once():
+    c = ota.Checker("1.0.0")
+    real = _patched(_checker_fake("1.1.0"))
+    try:
+        assert c.check(object(), GOOD_URL, 0) == "1.1.0"
+        assert c.available == "1.1.0"
+        assert c.check(object(), GOOD_URL, 86400) is None   # already announced
+        assert c.available == "1.1.0"                       # still available for /api/status
+    finally:
+        _restore(real)
+
+
+def test_checker_clears_available_once_current_and_never_announces_old():
+    c = ota.Checker("1.1.0")
+    c.available = "1.1.0"
+    real = _patched(_checker_fake("1.1.0"))
+    try:
+        assert c.check(object(), GOOD_URL, 0) is None
+    finally:
+        _restore(real)
+    assert c.available is None
+
+
+def test_checker_failure_retries_soon_and_keeps_the_last_result():
+    c = ota.Checker("1.0.0")
+    real = _patched(_checker_fake("1.1.0"))
+    try:
+        c.check(object(), GOOD_URL, 0)
+    finally:
+        _restore(real)
+    real = _patched(_checker_fake(raises=OSError("down")))
+    try:
+        assert c.check(object(), GOOD_URL, 100) is None   # never raises
+    finally:
+        _restore(real)
+    assert c.error == "down" and c.available == "1.1.0"
+    assert not c.due(100 + c.RETRY_S - 1, GOOD_URL)
+    assert c.due(100 + c.RETRY_S, GOOD_URL)
+
+
+def test_checker_changed_url_restarts_the_clock_and_forgets_the_result():
+    c = ota.Checker("1.0.0")
+    assert not c.due(0, GOOD_URL)
+    c.available = "9.9.9"
+    assert not c.due(10, "https://other.example/m.json")
+    assert c.available is None
+    assert c.due(10 + c.FIRST_DELAY_S, "https://other.example/m.json")
+
+
 if __name__ == "__main__":
     n = 0
     for name in sorted(k for k in dir() if k.startswith("test_")):

@@ -58,7 +58,7 @@ try:
 except ImportError:
     hashlib = None
 
-MAX_MANIFEST_SIZE = 8192
+MAX_MANIFEST_SIZE = 32768  # ~150 file entries; tools/gen_ota_manifest.py checks this too
 MAX_FILE_SIZE = 262144  # 256 KiB: comfortably covers every file in this repo today
 # httpclient's default 8 s body budget is sized for OpenSky's few-KB polls; a
 # ~170 KB firmware file over TLS on the ESP32-S3 needs far longer. This
@@ -146,6 +146,90 @@ def fetch_manifest(pool, url):
     report those; this module never swallows a fetch failure."""
     data = httpclient.get_bytes(pool, url, max_body=MAX_MANIFEST_SIZE)
     return parse_manifest(data)
+
+
+def version_tuple(v):
+    """"v1.4.0" / "1.4" -> (1, 4, 0) / (1, 4); None if any dotted part isn't
+    a plain non-negative integer (a "-rc1" tag, say)."""
+    if not isinstance(v, str):
+        return None
+    parts = v.strip().lstrip("vV").split(".")
+    out = []
+    for p in parts:
+        if not p.isdigit():
+            return None
+        out.append(int(p))
+    return tuple(out)
+
+
+def is_newer(remote, local):
+    """True if manifest version `remote` should be offered over running
+    version `local`. Numeric dotted versions compare as numbers (1.10 > 1.9);
+    anything unparseable falls back to "different", so a hand-picked tag is
+    still offered rather than silently ignored."""
+    r = version_tuple(remote)
+    l = version_tuple(local)
+    if r is None or l is None:
+        return remote != local
+    return r > l
+
+
+class Checker:
+    """Background "is there a newer manifest?" check for the panel (issue #29).
+    One instance for the whole run (firmware/code.py). Pure bookkeeping around
+    fetch_manifest(): due() says when to spend a fetch, check() does it and
+    never raises -- a failed check just retries sooner (RETRY_S) and leaves
+    whatever was already found in `available`. It only ever *reports*; applying
+    stays the owner's explicit action in the web UI.
+    """
+
+    FIRST_DELAY_S = 45    # after boot / a URL change: let Wi-Fi, NTP and the first poll settle
+    INTERVAL_S = 86400    # between successful checks
+    RETRY_S = 3600        # after a failed one
+
+    def __init__(self, local_version):
+        self.local = local_version
+        self.available = None    # newest newer version string seen, else None
+        self.announced = None    # the version the panel has already shown a notice for
+        self.error = None
+        self._url = None
+        self._next_at = None
+
+    def due(self, now, url):
+        """True when a fetch should run now. A blank url disables checking
+        (and forgets any earlier result); a changed url restarts the clock."""
+        if not url:
+            self._url = None
+            self._next_at = None
+            self.available = None
+            return False
+        if url != self._url:
+            self._url = url
+            self._next_at = now + self.FIRST_DELAY_S
+            self.available = None
+        return now >= self._next_at
+
+    def check(self, pool, url, now):
+        """Fetch the manifest and update `available`. Returns the version to
+        announce on the panel (set the first time a given version is found),
+        else None. Never raises."""
+        self._url = url  # so a later due(url) doesn't mistake this for a URL change
+        try:
+            m = fetch_manifest(pool, url)
+        except Exception as e:
+            self.error = str(e)
+            self._next_at = now + self.RETRY_S
+            return None
+        self.error = None
+        self._next_at = now + self.INTERVAL_S
+        if is_newer(m["version"], self.local):
+            self.available = m["version"]
+            if self.announced != self.available:
+                self.announced = self.available
+                return self.available
+        else:
+            self.available = None
+        return None
 
 
 def _sha256_hex(data):

@@ -194,6 +194,38 @@ def test_badge_painted_at_current_dimmer_level_immediately():
     assert pal[1] == scale_color(0xAABBCC, 0.5, dimmer.floor)
 
 
+def test_show_lines_fills_rows_and_clears_the_card():
+    c, dimmer = make()
+    c.show_card(FULL_CARD, dimmer)
+    c.show_lines(("TAILWATCH v1.0.0", "192.168.1.50", "tailwatch-0405.local"))
+    assert [l.text for l in c.lines] == ["TAILWATCH v1.0.0", "192.168.1.50",
+                                         "tailwatch-0405.local", ""]
+    assert c.message.text == "" and c.flight.text == "" and c.telemetry.text == ""
+    assert c._badge_tile is None and c._badge_key is None
+
+
+def test_show_lines_extra_lines_are_dropped_not_overflowed():
+    c, dimmer = make()
+    c.show_lines(["a", "b", "c", "d", "e", "f"])
+    assert [l.text for l in c.lines] == ["a", "b", "c", "d"]
+
+
+def test_card_and_message_clear_a_previous_lines_screen():
+    c, dimmer = make()
+    c.show_lines(("BOOT", "x"))
+    c.show_card(FULL_CARD, dimmer)
+    assert all(l.text == "" for l in c.lines)
+    c.show_lines(("BOOT", "x"))
+    c.show_message("NO LINK")
+    assert all(l.text == "" for l in c.lines) and c.message.text == "NO LINK"
+
+
+def test_lines_screen_is_dimmed_with_everything_else():
+    # the rows live in c.group, the Dimmer's awake group, unlike setupscreen's own group
+    c, dimmer = make()
+    assert all(l in c.group for l in c.lines)
+
+
 if __name__ == "__main__":
     n = 0
     for name in sorted(k for k in dir() if k.startswith("test_")):

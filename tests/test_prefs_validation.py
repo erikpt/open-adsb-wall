@@ -43,6 +43,13 @@ assert c(display_mode="cycle")["display_mode"] == "cycle"
 for bad in ("bogus", "", None, True, 1, [], {}):
     assert c(display_mode=bad)["display_mode"] == "hero", bad
 
+# issue #29: ota_url is "" (checks off) or an https:// URL, else it falls back to ""
+assert c()["ota_url"] == ""
+assert c(ota_url=" https://example.com/m.json ")["ota_url"] == "https://example.com/m.json"
+for bad in ("http://example.com/m.json", "ftp://x", "example.com", "https://x/\nHost: y",
+            "https://" + "a" * 300, None, 5, True, [], {}):
+    assert c(ota_url=bad)["ota_url"] == "", bad
+
 # end-to-end: malformed stored file loads without raising and save() rewrites clean values
 d = tempfile.mkdtemp()
 prefs.PATH = os.path.join(d, "prefs.json")

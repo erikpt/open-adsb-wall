@@ -22,6 +22,7 @@ h1{font-size:1.2rem}
 <h1>TailWatch</h1>
 <p class="muted" id="status">loading…</p>
 <p class="warn" id="apnote" hidden>Setup mode: TailWatch could not join <b id="cfgssid"></b>. Enter your Wi-Fi below.</p>
+<p class="warn" id="updatewarn" hidden>Firmware update available: <b id="updatever"></b> (running <span id="runningver"></span>). <a href="#ota" style="color:#ffd58a">Go to Firmware update</a>.</p>
 <p class="warn" id="clockwarn" hidden>Clock not set (no internet time yet). Sleep and night schedules are paused; the panel stays at day brightness.</p>
 <form id="f" method="POST" action="/api/prefs">
 <label>Latitude</label><input name="lat" id="lat" step="any"/>
@@ -109,6 +110,8 @@ h1{font-size:1.2rem}
 <button type="button" id="ota_apply" disabled>Apply update &amp; restart</button>
 <button type="button" id="ota_rollback">Roll back last update &amp; restart</button>
 <p class="muted" id="ota_status"></p>
+<p class="muted">A successful check also saves this URL, which turns on a daily background check: TailWatch shows an "update available" notice on the panel and here, but never installs anything by itself. Don't put credentials in the URL.</p>
+<button type="button" id="ota_off">Turn off background update checks</button>
 <p class="muted">Every file is verified (checksum) before anything is written; a failed check or download never touches the current firmware. Rolling back restores the previous version of every file the last update changed.</p>
 </div>
 <script>
@@ -137,6 +140,9 @@ fetch("/api/prefs").then(r=>r.json()).then(p=>{
 function refreshStatus(){
   return fetch("/api/status").then(r=>r.json()).then(s=>{
     $("clockwarn").hidden=!!s.clock_trusted;
+    $("updatewarn").hidden=!s.update_available;
+    $("updatever").textContent=s.update_available||"";
+    $("runningver").textContent=s.version||"";
     if(s.mode==="ap"){
       $("apnote").hidden=false;
       $("cfgssid").textContent=s.ssid||"(no network configured)";
@@ -181,8 +187,15 @@ $("ota_check").addEventListener("click",()=>{
       $("ota_info").textContent="Version "+j.version+": "+j.files.length+" file(s), "+kb+" KB";
       $("ota_apply").disabled=false;
       $("ota_status").textContent="Ready to apply.";
+      fetch("/api/prefs",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ota_url:url})}).catch(()=>{});
     })
     .catch(()=>{$("ota_status").textContent="Check failed -- no reply.";});
+});
+$("ota_off").addEventListener("click",()=>{
+  fetch("/api/prefs",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ota_url:""})})
+    .then(r=>{if(!r.ok)throw 0;$("ota_url").value="";otaChecked=null;$("ota_apply").disabled=true;$("ota_info").textContent="";
+      $("ota_status").textContent="Background checks are off.";})
+    .catch(()=>{$("ota_status").textContent="Could not save -- try again.";});
 });
 $("ota_apply").addEventListener("click",()=>{
   if(!otaChecked||otaChecked.url!==$("ota_url").value.trim()){

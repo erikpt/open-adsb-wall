@@ -36,13 +36,17 @@ CYCLE_PIN = dict(tcp.PIN, display_mode="cycle", nm=50)  # wide enough to keep al
 
 def _displays(out):
     """Every "display ..." line code.py printed, in order."""
-    return [line[len("display "):] for line in out.splitlines() if line.startswith("display ")]
+    # boot/update screens print their text after the kind ("BOOT TAILWATCH v... / <ip>"):
+    # keep just the kind so callers can filter them like NO TRAFFIC
+    return [line[len("display "):].split(" ", 1)[0] if line.startswith(("display BOOT", "display UPDATE"))
+            else line[len("display "):]
+            for line in out.splitlines() if line.startswith("display ")]
 
 
 def test_rotates_through_candidates_closest_first():
     outcome, out = tcp.run_with(CYCLE_PIN, [("ok", THREE_STATES)], end=45)
     assert outcome == "stop", (outcome, out[-800:])
-    shown = [d for d in _displays(out) if d != "NO TRAFFIC"]
+    shown = [d for d in _displays(out) if d not in ("NO TRAFFIC", "BOOT")]
     assert shown, out
     # first real card is the closest; order never regresses to a farther
     # card without passing through the nearer ones first (no shuffling).

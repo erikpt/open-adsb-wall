@@ -41,6 +41,7 @@ from linkwatch import LinkWatch, UP as LINK_UP
 from buttons import HoldButton
 import badapple
 import ota
+from version import VERSION
 
 displayio.release_displays()
 
@@ -74,7 +75,10 @@ display = framebufferio.FramebufferDisplay(matrix, auto_refresh=True)
 card_widget = Card()  # issue #27: owns the real card's displayio.Group
 display.root_group = card_widget.group
 dimmer = Dimmer(display, card_widget.group, displayio.Group(), floor=min_visible(BIT_DEPTH))
-card_widget.show_message("NO TRAFFIC")  # shown until the first poll completes
+# Boot status, not "NO TRAFFIC": that read as "no planes nearby" through the whole
+# ~20 s Wi-Fi join + NTP + first poll. refresh_display() replaces this with a
+# status screen carrying the IP until the first successful poll.
+card_widget.show_lines(("TAILWATCH", "v" + VERSION, "connecting..."))
 
 prefs = load()
 dimmer.apply(brightness(prefs))
@@ -348,6 +352,8 @@ def get_status(request: Request):
         "clock_trusted": clock_trusted(),
         "rebooting": reset_at is not None,
         "wifi_drops": link.drops if link is not None else 0,  # station outages since boot
+        "version": VERSION,
+        "update_available": ota_checker.available,  # newer manifest version found by the background check, or null
     })
 
 
@@ -620,6 +626,11 @@ def poll_card():
 last_poll = 0
 poll_backoff_until = 0   # monotonic deadline; set past a 429's Retry-After
 last_card = None         # last successfully assembled card (kept across failed polls)
+polled_ok = False        # True after the first successful poll_card(): until then the panel shows boot status
+ota_checker = ota.Checker(VERSION)  # issue #29: background "newer manifest?" check, report-only
+NOTICE_S = 10            # how long the panel shows an "update available" notice
+notice_until = 0
+notice_lines = ()
 last_poll_ok_at = time.monotonic()  # last successful poll_card(); starts "now" for a boot grace period
 last_bright = 0
 last_ntp_try = time.monotonic()
@@ -633,6 +644,17 @@ def _local_hhmm():
         return None
     h, m = divmod(local_minutes(prefs["tz_offset_min"], prefs["us_dst"]), 60)
     return "%02d:%02d" % (h, m)
+
+
+def _boot_lines():
+    """Boot status screen, up to the first successful poll: version, the IP
+    the web UI answers on, and its mDNS name when that's actually advertising
+    (issue #31) -- the owner's way to find the device without serial."""
+    lines = ["TAILWATCH v" + VERSION, host]
+    if mdns_adv is not None and mdns_adv.server is not None:
+        lines.append(mdns_adv.hostname + ".local")
+    lines.append("waiting for data")
+    return lines
 
 
 def refresh_display(now):
@@ -661,6 +683,10 @@ def refresh_display(now):
     """
     if badapple_player.active:
         return
+    if now < notice_until:
+        card_widget.show_lines(notice_lines)
+        print("display UPDATE", " / ".join(notice_lines))
+        return
     cycle = prefs["display_mode"] == "cycle"
     stale_s = hero.max_stale_s
     if cycle:
@@ -678,13 +704,14 @@ def refresh_display(now):
     if link_down:
         card_widget.show_message("NO LINK")
         print("display NO LINK")
+    elif not polled_ok:  # first poll hasn't succeeded yet: boot status + IP, not "NO TRAFFIC"
+        lines = _boot_lines()
+        card_widget.show_lines(lines)
+        print("display BOOT", " / ".join(lines))
     elif cycle:
         card = _assemble_card(cand)
         card_widget.show_card(card, dimmer, _local_hhmm())
         print("display", card.get("flight") or "NO TRAFFIC")
-    elif last_card is None:  # within the boot grace period, first poll not back yet
-        card_widget.show_message("NO TRAFFIC", _local_hhmm())
-        print("display NO TRAFFIC")
     else:
         card_widget.show_card(last_card, dimmer, _local_hhmm())
         print("display", last_card.get("flight") or "NO TRAFFIC")
@@ -783,6 +810,7 @@ while True:
         try:
             last_card = poll_card()
             last_poll_ok_at = now
+            polled_ok = True
             print(last_card)
             refresh_display(now)
         except httpclient.HTTPStatusError as e:
@@ -791,5 +819,18 @@ while True:
             print("poll http", e.status, "retry_after", e.retry_after)
         except Exception as e:
             print("poll", e)  # OSError / RuntimeError / TimeoutError / ValueError: keep last_card
+
+    # Background OTA check (issue #29): daily, only when the owner saved a
+    # manifest URL. Report-only -- a notice on the panel and `update_available`
+    # in /api/status; installing stays an explicit tap in the web UI.
+    if online and ota_checker.due(now, prefs["ota_url"]):
+        found = ota_checker.check(pool, prefs["ota_url"], now)
+        now = time.monotonic()  # the fetch may have blocked
+        if ota_checker.error:
+            print("ota check failed", ota_checker.error)
+        if found:
+            print("ota: update available", found)
+            notice_lines = ("UPDATE AVAILABLE", "v" + found, "running v" + VERSION, host)
+            notice_until = now + NOTICE_S
 
     time.sleep(0.05)

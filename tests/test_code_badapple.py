@@ -71,7 +71,9 @@ def test_normal_display_resumes_after_playback():
     assert outcome == "stop", (outcome, out[-800:])
     stop_i = out.index("badapple: stop (clip ended)")
     after = out[stop_i:]
-    assert "display NO TRAFFIC" in after, after[:500]  # empty sky in this sim: normal NO TRAFFIC resumes
+    # No poll ever succeeds in this sim, so the normal display that resumes is
+    # the boot status screen (issue #30 only cares that refresh_display() came back).
+    assert "display BOOT" in after, after[:500]
 
 
 if __name__ == "__main__":

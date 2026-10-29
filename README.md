@@ -20,7 +20,7 @@ MatrixPortal S3 + 128x64 HUB75 panel.
 - `firmware/lib/buttons.py` (hold-to-trigger button helper)
 - `firmware/lib/badapple.py`, `firmware/lib/badapple_frames.py` (Bad Apple easter egg, hold UP 5s -- issue #30)
 - `firmware/lib/nyan.py` (Nyan Cat easter egg; not currently wired into `firmware/code.py`)
-- `firmware/lib/ota.py` (OTA firmware updates from the web UI -- issue #29)
+- `firmware/lib/ota.py`, `firmware/lib/version.py` (OTA firmware updates from the web UI, and the version they compare against -- issue #29)
 
 Libraries from the CircuitPython bundle:
 
@@ -75,8 +75,16 @@ anywhere reachable, e.g. a GitHub release asset):
 }
 ```
 
+To produce a manifest from this repo: bump `VERSION` in
+`firmware/lib/version.py`, then
+`python3 tools/gen_ota_manifest.py --base-url https://.../1.1.0` (add
+`--since <git ref>` to ship only changed files) and upload `manifest.json` plus
+the files it lists, laid out as `<base-url>/<path>`.
+
 "Check for update" fetches and validates the manifest without changing
-anything; "Apply update" re-fetches and verifies every file's checksum and
+anything, and saves the URL so the device re-checks it daily in the background
+(a notice on the panel and a banner here when a newer `version` appears; it
+**never installs by itself** -- "Turn off background update checks" stops it); "Apply update" re-fetches and verifies every file's checksum and
 size before writing anything, then restarts. If something goes wrong after
 applying, "Roll back last update" restores the previous version of every
 file that update changed (one level of history). This is all pull-only --
@@ -99,6 +107,7 @@ back from there.
 - If an existing board's `settings.toml` has `CIRCUITPY_WEB_API_PASSWORD`, delete
   that line and hard reset. Otherwise Web Workflow holds port 80, the TailWatch
   UI prints "http start failed", and the filesystem is exposed on the LAN.
+- Boot screen: `TAILWATCH` + version while connecting, then the version, IP address (and `.local` name, if mDNS is up) and "waiting for data" until the first aircraft poll succeeds -- the way to find the device's address without serial. Normal operation then shows only the aircraft card.
 - Local UI: `http://<s3-ip>/` after it joins Wi-Fi, or `http://tailwatch-XXXX.local/`
   (same `XXXX` suffix as the setup AP name, so two units on one LAN never
   collide) if your network supports mDNS/Bonjour and the board's CircuitPython
