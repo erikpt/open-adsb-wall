@@ -51,6 +51,8 @@ Y_TYPE = 35
 Y_CITY_PHASE = 50
 Y_TELEMETRY = 62
 Y_MESSAGE = 28  # "NO TRAFFIC" / "NO LINK": roughly vertical centre of the panel
+LINE_PX = 15    # show_lines(): four rows at y = 7, 22, 37, 52 (lib/setupscreen.py's pitch)
+MAX_LINES = 4
 
 
 def _fmt_num(v):
@@ -98,8 +100,11 @@ class Card:
         self.type = self._label(TEXT_X, Y_TYPE, COLOR_LABEL)
         self.city_phase = self._label(1, Y_CITY_PHASE, COLOR_LABEL)
         self.telemetry = self._label(1, Y_TELEMETRY, COLOR_TEXT)
+        self.lines = [self._label(1, 7 + i * LINE_PX, COLOR_TEXT) for i in range(MAX_LINES)]
         for lbl in (self.message, self.airline, self.flight, self.type,
                     self.city_phase, self.telemetry):
+            self.group.append(lbl)
+        for lbl in self.lines:
             self.group.append(lbl)
 
     @staticmethod
@@ -128,6 +133,26 @@ class Card:
             self._badge_tile = None
             self._badge_key = None
 
+    def _clear_lines(self):
+        for lbl in self.lines:
+            lbl.text = ""
+
+    def show_lines(self, lines):
+        """A multi-line text screen (boot status, "update available"): up to
+        MAX_LINES rows of <= 21 chars (6 px font, 128 px wide), clearing every
+        card field and the badge exactly like show_message() does. Unlike
+        lib/setupscreen.py's AP screen this lives in the same group, so the
+        Dimmer scales it like everything else."""
+        self._hide_badge()
+        self.message.text = ""
+        self.airline.text = ""
+        self.flight.text = ""
+        self.type.text = ""
+        self.city_phase.text = ""
+        self.telemetry.text = ""
+        for i, lbl in enumerate(self.lines):
+            lbl.text = lines[i] if i < len(lines) else ""
+
     def show_card(self, card, dimmer, clock_hhmm=None):
         """card: firmware/code.py:poll_card()'s dict shape. A null flight
         (empty sky, a successful poll with no candidate) shows NO TRAFFIC
@@ -135,6 +160,7 @@ class Card:
         if card.get("flight") is None:
             self.show_message("NO TRAFFIC", clock_hhmm)
             return
+        self._clear_lines()
         self.message.text = ""
         self._set_badge(card.get("logo"), dimmer)
         self.airline.text = card.get("airline") or ""
@@ -151,6 +177,7 @@ class Card:
         clock isn't trusted yet rather than show a wrong/epoch time -- see
         firmware/lib/schedule.py:clock_trusted()."""
         self._hide_badge()
+        self._clear_lines()
         self.airline.text = ""
         self.flight.text = ""
         self.type.text = ""

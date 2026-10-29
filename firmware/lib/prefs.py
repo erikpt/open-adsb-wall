@@ -23,6 +23,8 @@ DEFAULTS = {
     "us_dst": True,         # auto-apply fixed US DST rule (lib/tz.py); not a tz database
     "api": "https://opensky-network.org/api",
     "token": "",
+    "display_mode": "hero",  # "hero" (one aircraft, hysteresis) | "cycle" (issue #20)
+    "ota_url": "",           # https:// OTA manifest URL, "" = no background update check (issue #29)
 }
 
 _BOOLS = {
@@ -126,6 +128,17 @@ def _clamp(p):
     p.pop("timezone", None)  # legacy IANA string: unresolvable on-device, drop it
     if p["night_mode"] not in ("off", "fixed", "sunset"):
         p["night_mode"] = "sunset"
+    if p.get("display_mode") not in ("hero", "cycle"):
+        p["display_mode"] = DEFAULTS["display_mode"]
+    u = p.get("ota_url")
+    if not isinstance(u, str):
+        p["ota_url"] = _bad("ota_url", u)
+    else:
+        u = u.strip()
+        if u and (not u.lower().startswith("https://") or len(u) > 300
+                  or any(ord(c) < 0x20 or ord(c) == 0x7F for c in u)):
+            u = _bad("ota_url", u)
+        p["ota_url"] = u
     return p
 
 

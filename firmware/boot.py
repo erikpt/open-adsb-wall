@@ -23,3 +23,14 @@ if usb_write:
 else:
     storage.remount("/", readonly=False)
     print("boot: CIRCUITPY writable by code.py, read-only over USB")
+
+# Finish an interrupted OTA file swap (issue #29) while only boot.py's own
+# imports have run: if the cut left code.py itself as just code.py.ota_new
+# there would be nothing for the supervisor to run. Needs the writable
+# remount above (skipped with UP held -- code.py retries before its imports).
+if not usb_write:
+    try:
+        import ota_recover
+        ota_recover.recover()
+    except Exception as e:  # never let recovery trouble block the boot itself
+        print("boot: ota recover failed", e)

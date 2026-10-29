@@ -6,6 +6,7 @@ MatrixPortal S3 + 128x64 HUB75 panel.
 
 - `firmware/boot.py`
 - `firmware/code.py`
+- `firmware/ota_recover.py` (root of the drive, not `lib/`: finishes an interrupted OTA update at boot -- issue #29)
 - `prefs.json` (copy from `firmware/prefs.example.json`)
 - `settings.toml` (Wi-Fi only -- copy from `firmware/settings.toml.example`; do **not** set `CIRCUITPY_WEB_API_PASSWORD`)
 - `firmware/www/index.html`
@@ -16,6 +17,10 @@ MatrixPortal S3 + 128x64 HUB75 panel.
 - `firmware/lib/setupscreen.py` (panel setup-AP credentials screen, issue #11)
 - `firmware/lib/linkwatch.py` (station Wi-Fi drop detection + bounded reconnect watchdog)
 - `firmware/lib/httpclient.py` (shared, always-closing adafruit_requests client pattern for the future `firmware/lib/net.py`)
+- `firmware/lib/buttons.py` (hold-to-trigger button helper)
+- `firmware/lib/badapple.py`, `firmware/lib/badapple_frames.py` (Bad Apple easter egg, hold UP 5s -- issue #30)
+- `firmware/lib/nyan.py` (Nyan Cat easter egg; not currently wired into `firmware/code.py`)
+- `firmware/lib/ota.py`, `firmware/lib/version.py` (OTA firmware updates from the web UI, and the version they compare against -- issue #29)
 
 Libraries from the CircuitPython bundle:
 
@@ -53,12 +58,61 @@ then hard reset.
 `firmware/boot.py` only runs on hard reset/power-up; a soft reload (Ctrl-D,
 file save) does not re-run it.
 
+## OTA firmware updates (no USB needed)
+
+The web UI's "Firmware update" section can update `code.py`/`lib/*`/`www/*`
+over Wi-Fi, no physical access required -- useful for the second unit
+(DESIGN.md sec. 5). Paste the URL of a manifest JSON file (host it
+anywhere reachable, e.g. a GitHub release asset):
+
+```json
+{
+  "version": "1.4.0",
+  "files": [
+    {"path": "code.py", "url": "https://.../code.py",
+     "sha256": "<sha256 hex digest>", "size": 12345}
+  ]
+}
+```
+
+To produce a manifest from this repo: bump `VERSION` in
+`firmware/lib/version.py`, then
+`python3 tools/gen_ota_manifest.py --base-url https://.../1.1.0` (add
+`--since <git ref>` to ship only changed files) and upload `manifest.json` plus
+the files it lists, laid out as `<base-url>/<path>`.
+
+"Check for update" fetches and validates the manifest without changing
+anything, and saves the URL so the device re-checks it daily in the background
+(a notice on the panel and a banner here when a newer `version` appears; it
+**never installs by itself** -- "Turn off background update checks" stops it); "Apply update" re-fetches and verifies every file's checksum and
+size before writing anything, then restarts. If something goes wrong after
+applying, "Roll back last update" restores the previous version of every
+file that update changed (one level of history). This is all pull-only --
+the device fetches from the URL you give it, there is no push/hosted update
+service of this project's own (issue #2: no cloud tier).
+
+If a power cut happens mid-apply, the next boot finishes the interrupted
+swap of the whole file set on its own (`firmware/ota_recover.py`, run from
+`boot.py` and again at the very top of `code.py`, before anything in `lib/`
+is imported; same crash-safe `.new`/`.bak` dance as the Wi-Fi settings
+writer) rather than leaving a mixed set of old/new files. `ota_recover.py`
+must sit at the drive root next to `boot.py`/`code.py`, and OTA manifests
+can't replace it. There is no automatic "this update won't boot,
+revert" detection yet -- if an update leaves the device unreachable over
+Wi-Fi, recover with the USB procedure above (or a full reflash) and roll
+back from there.
+
 ## Behavior
 
 - If an existing board's `settings.toml` has `CIRCUITPY_WEB_API_PASSWORD`, delete
   that line and hard reset. Otherwise Web Workflow holds port 80, the TailWatch
   UI prints "http start failed", and the filesystem is exposed on the LAN.
-- Local UI: `http://<s3-ip>/` after it joins Wi-Fi
+- Boot screen: `TAILWATCH` + version while connecting, then the version, IP address (and `.local` name, if mDNS is up) and "waiting for data" until the first aircraft poll succeeds -- the way to find the device's address without serial. Normal operation then shows only the aircraft card.
+- Local UI: `http://<s3-ip>/` after it joins Wi-Fi, or `http://tailwatch-XXXX.local/`
+  (same `XXXX` suffix as the setup AP name, so two units on one LAN never
+  collide) if your network supports mDNS/Bonjour and the board's CircuitPython
+  build includes the `mdns` module -- if not, `firmware/lib/mdnsadv.py` prints
+  nothing extra and the IP-based URL above still works
 - Prefs saved on device (`/prefs.json`)
 - Sleep blanks the panel (`brightness = 0`)
 - Night mode: off / fixed hours / after local sunset
@@ -67,6 +121,7 @@ file save) does not re-run it.
 - 10 miles each way → OpenSky bbox (printed to serial until `firmware/lib/net.py` is wired)
 - No cloud API -- OpenSky is called directly from the device; hero selection, filters, and airline badges all run on-device (`firmware/lib/hero.py`, `firmware/lib/filters.py`, `firmware/lib/enrich.py`, `firmware/lib/logos/`)
 - If Wi-Fi drops, TailWatch retries the join for ~4 min (serial shows `wifi:` lines), moves the web UI to the new IP, and otherwise reboots into the setup AP.
+- Hold the UP button for 5s for a Bad Apple!! easter egg (24s, plays without interrupting the web UI or ADS-B poll; hold UP again to stop it early).
 
 ## First-time / new Wi-Fi setup
 

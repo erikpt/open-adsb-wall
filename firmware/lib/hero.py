@@ -98,8 +98,10 @@ def candidates(resp, lat0, lon0):
     return out
 
 
-def _rank(c):
-    # DESIGN.md sec. 8: closest to pin; tie-break lower altitude, then faster.
+def rank(c):
+    """Sort key: closest to pin; tie-break lower altitude, then faster
+    (DESIGN.md sec. 8). Public -- lib/cycle.py (issue #20) reuses this exact
+    ranking to pick its top-N list, no reason for two different orderings."""
     alt = c["alt"]
     spd = c["spd"]
     return (c["dist"], 1e9 if alt is None else alt, -(spd or 0))
@@ -114,7 +116,7 @@ def select(current_hex, cands, held_s=0, max_stale_s=45):
     reason: "none" | "new" | "keep" | "dwell" | "closer" | "gone" | "stale".
     """
     fresh = [c for c in cands if c["age"] <= max_stale_s and c["hex"]]
-    best = min(fresh, key=_rank) if fresh else None
+    best = min(fresh, key=rank) if fresh else None
 
     if current_hex is None:
         return best, ("new" if best else "none")
